@@ -47,3 +47,4 @@ lastsave
 time
 reset
 shutdown
+debug

@@ -12,11 +12,21 @@ operational parity.
 
 ## Status
 
-Bootstrap / P0. The server can currently speak RESP2/RESP3, run a minimal
-event loop, and exercise the snapshot database with `SET`/`GET`/`DEL`.
+Bootstrap / P0. Working today:
 
-The reference KeyDB tree lives in `KeyDB/` during bootstrap. It is read-only
-input for the specification extractor and conformance oracle.
+- RESP2 and RESP3 codec with inline commands, protocol limits, and Redis-style
+  error strings;
+- a `mio` event loop with a global state lock and batched command execution;
+- an MVCC snapshot database with tombstones, nested read views, COW values,
+  and KeyDB-compatible timestamps;
+- strings, expiry, keyspace commands, `DEBUG MVCC`, `HELLO`, `CLIENT`,
+  `CONFIG`, `INFO`, and a first conformance harness against KeyDB's
+  `unit/protocol.tcl`;
+- generated command/config/test manifests and a Zig `rekeydb-cli`.
+
+The reference KeyDB tree lives in `KeyDB/` (development snapshot) and
+`reference/keydb/` (upstream v6.3.4, fetched on demand). Both are read-only
+inputs for the specification extractor and conformance oracle.
 
 ## Layout
 
@@ -34,15 +44,16 @@ docs/adr/                 architecture decision records
 ## Build
 
 ```sh
-cargo build
-cargo test
+make build
+make test
+make check
 ```
 
 The pinned toolchain is in `rust-toolchain.toml`. Zig 0.17.0 is pinned in
 `zig/zig-version`. Build the Zig tools with:
 
 ```sh
-cd zig && zig build
+./zig/build.sh
 ```
 
 ## Specification extraction
@@ -51,7 +62,8 @@ The command and configuration surface is generated from the reference KeyDB
 source, so the port cannot silently drift:
 
 ```sh
-cargo run -p xtask -- spec
+make spec
+cargo run -p xtask -- check   # validate without the reference tree
 ```
 
 This writes `spec/commands.json`, `spec/configs.json`, and

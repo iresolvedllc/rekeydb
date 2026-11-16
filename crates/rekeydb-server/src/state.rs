@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use rekeydb_core::{Database, Entry, ExpireEntry, MvccClock};
+use rekeydb_core::{Database, Entry, ExpireEntry, MvccClock, Snapshot};
 use rekeydb_protocol::{Command, RespValue, RespVersion};
 
 use crate::config::Config;
@@ -75,6 +75,7 @@ pub struct State {
     start_unix: i64,
     now_override: Option<i64>,
     config_values: BTreeMap<String, String>,
+    debug_snapshots: Vec<Option<Arc<Snapshot<Vec<u8>>>>>,
     pub connected_clients: usize,
 }
 
@@ -124,6 +125,7 @@ impl State {
             start_unix: now_unix_ms() / 1000,
             now_override: None,
             config_values,
+            debug_snapshots: (0..databases).map(|_| None).collect(),
             connected_clients: 0,
         };
         state.refresh_config_values();
@@ -438,6 +440,7 @@ impl State {
                 }
             }
             "CONFIG" => self.cmd_config(args),
+            "DEBUG" => self.cmd_debug(args, client),
             "INFO" => self.cmd_info(args),
             "COMMAND" => self.cmd_command(args),
             "CLIENT" => self.cmd_client(args, client),
@@ -1046,6 +1049,86 @@ impl State {
         }
     }
 
+    fn cmd_debug(&mut self, args: &[Vec<u8>], client: &mut ClientContext) -> Outcome {
+        if args.len() < 2 {
+            return Outcome::error("ERR wrong number of arguments for 'debug' command");
+        }
+        let sub = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+        match sub.as_str() {
+            "MVCC" => {
+                if args.len() < 3 {
+                    return Outcome::error("ERR DEBUG MVCC requires a subcommand");
+                }
+                match String::from_utf8_lossy(&args[2])
+                    .to_ascii_uppercase()
+                    .as_str()
+                {
+                    "SNAPSHOT" => {
+                        let checkpoint = self.clock.current();
+                        if self.debug_snapshots[client.db].is_none() {
+                            let snapshot = self.dbs[client.db].create_snapshot(checkpoint);
+                            self.debug_snapshots[client.db] = Some(snapshot);
+                        }
+                        let checkpoint = self.debug_snapshots[client.db]
+                            .as_ref()
+                            .map_or(0, |snapshot| snapshot.checkpoint());
+                        Outcome::reply(RespValue::Integer(checkpoint as i64))
+                    }
+                    "END" => {
+                        let Some(snapshot) = self.debug_snapshots[client.db].take() else {
+                            return Outcome::ok();
+                        };
+                        match self.dbs[client.db].end_snapshot(snapshot) {
+                            Ok(()) => Outcome::ok(),
+                            Err(snapshot) => {
+                                self.debug_snapshots[client.db] = Some(snapshot);
+                                Outcome::error("ERR snapshot is pinned")
+                            }
+                        }
+                    }
+                    "DEPTH" => Outcome::reply(RespValue::Integer(
+                        self.dbs[client.db].snapshot_depth() as i64,
+                    )),
+                    _ => Outcome::error("ERR unknown DEBUG MVCC subcommand"),
+                }
+            }
+            "OBJECT" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                self.expire_if_needed(client.db, &args[2]);
+                let Some(entry) = self.dbs[client.db].get(&args[2]) else {
+                    return Outcome::error("ERR no such key");
+                };
+                let encoding = debug_encoding(&entry.value);
+                let address = fnv1a(&args[2]);
+                let text = format!(
+                    "Value at:0x{address:x} refcount:1 encoding:{encoding} serializedlength:{} lru:0 lru_seconds_idle:0",
+                    entry.value.len()
+                );
+                Outcome::reply(RespValue::bulk(text.into_bytes()))
+            }
+            "SLEEP" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                let Ok(seconds) = String::from_utf8_lossy(&args[2]).parse::<f64>() else {
+                    return Outcome::error("ERR value is not a valid float");
+                };
+                if seconds > 0.0 {
+                    std::thread::sleep(std::time::Duration::from_secs_f64(seconds.min(60.0)));
+                }
+                Outcome::ok()
+            }
+            "SET-ACTIVE-EXPIRE" | "QUICKLIST-PACKED-THRESHOLD" | "STRINGMATCH-LEN" => Outcome::ok(),
+            "JMAP" => Outcome::ok(),
+            _ => Outcome::error(format!(
+                "ERR DEBUG subcommand '{}' is not supported yet",
+                String::from_utf8_lossy(&args[1])
+            )),
+        }
+    }
+
     fn cmd_hello(&mut self, args: &[Vec<u8>], client: &mut ClientContext) -> Outcome {
         let mut index = 1;
         let mut version = client.version;
@@ -1162,6 +1245,27 @@ impl State {
             Outcome::error("WRONGPASS invalid username-password pair or user is disabled.")
         }
     }
+}
+
+fn debug_encoding(value: &[u8]) -> &'static str {
+    if let Ok(parsed) = parse_i64(value)
+        && parsed.to_string().as_bytes() == value
+    {
+        "int"
+    } else if value.len() <= 44 {
+        "embstr"
+    } else {
+        "raw"
+    }
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn wrong_args(args: &[Vec<u8>]) -> Outcome {
@@ -1441,6 +1545,55 @@ mod tests {
                 RespValue::bulk(b"a".to_vec()),
                 RespValue::bulk(b"b".to_vec())
             ])
+        );
+    }
+
+    #[test]
+    fn debug_mvcc_snapshot_roundtrip() {
+        let mut state = state();
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"SET", b"k", b"v1"]);
+        let reply = run(&mut state, &mut client, &[b"DEBUG", b"MVCC", b"SNAPSHOT"]);
+        assert!(matches!(reply, RespValue::Integer(_)));
+        assert_eq!(
+            run(&mut state, &mut client, &[b"DEBUG", b"MVCC", b"DEPTH"]),
+            RespValue::Integer(1)
+        );
+        run(&mut state, &mut client, &[b"SET", b"k", b"v2"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"DEBUG", b"MVCC", b"END"]),
+            RespValue::ok()
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"GET", b"k"]),
+            RespValue::bulk(b"v2".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"DEBUG", b"MVCC", b"DEPTH"]),
+            RespValue::Integer(0)
+        );
+    }
+
+    #[test]
+    fn debug_object_reports_stable_encoding() {
+        let mut state = state();
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"SET", b"n", b"123"]);
+        let first = run(&mut state, &mut client, &[b"DEBUG", b"OBJECT", b"n"]);
+        let RespValue::BulkString(first) = first else {
+            panic!("expected bulk string");
+        };
+        let text = String::from_utf8(first).unwrap();
+        assert!(text.contains("encoding:int"));
+        run(&mut state, &mut client, &[b"INCR", b"n"]);
+        let second = run(&mut state, &mut client, &[b"DEBUG", b"OBJECT", b"n"]);
+        let RespValue::BulkString(second) = second else {
+            panic!("expected bulk string");
+        };
+        let second = String::from_utf8(second).unwrap();
+        assert_eq!(
+            text.split_whitespace().nth(1),
+            second.split_whitespace().nth(1)
         );
     }
 

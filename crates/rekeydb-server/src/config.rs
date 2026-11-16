@@ -63,89 +63,95 @@ impl Config {
         S: Into<String>,
     {
         let args: Vec<String> = args.into_iter().map(Into::into).collect();
-        let mut config = Config::default();
+
+        // First pass: locate the config file and handle informational flags.
+        // KeyDB config files are loaded before command-line overrides.
         let mut config_path: Option<PathBuf> = None;
-        let mut i = 1;
-        while i < args.len() {
-            match args[i].as_str() {
+        let mut config_arg: Option<usize> = None;
+        let mut index = 1;
+        while index < args.len() {
+            match args[index].as_str() {
                 "--help" | "-h" => return Ok(Startup::Help),
                 "--version" | "-v" => return Ok(Startup::Version),
                 "--config" => {
                     let path = args
-                        .get(i + 1)
+                        .get(index + 1)
                         .ok_or_else(|| "--config requires a path".to_string())?;
+                    if config_path.is_some() {
+                        return Err("--config specified more than once".to_string());
+                    }
                     config_path = Some(PathBuf::from(path));
-                    i += 2;
+                    config_arg = Some(index);
+                    index += 2;
                 }
-                "--port" => {
-                    let value = args
-                        .get(i + 1)
-                        .ok_or_else(|| "--port requires a value".to_string())?;
-                    config.port = parse_port(value)?;
-                    i += 2;
-                }
-                "--bind" => {
-                    config.bind = args
-                        .get(i + 1)
-                        .ok_or_else(|| "--bind requires a value".to_string())?
-                        .clone();
-                    i += 2;
-                }
-                "--databases" => {
-                    let value = args
-                        .get(i + 1)
-                        .ok_or_else(|| "--databases requires a value".to_string())?;
-                    config.databases = parse_count(value, "databases")?;
-                    i += 2;
-                }
-                "--requirepass" => {
-                    config.requirepass = args.get(i + 1).cloned();
-                    i += 2;
+                "--port" | "--bind" | "--databases" | "--requirepass" => {
+                    if args.get(index + 1).is_none() {
+                        return Err(format!("{} requires a value", args[index]));
+                    }
+                    index += 2;
                 }
                 other if other.starts_with("--") => {
                     return Err(format!("unknown option: {other}"));
                 }
                 other => {
-                    // KeyDB accepts `--port 6380` style options only. A bare
-                    // argument is an error rather than silently ignored.
-                    return Err(format!("unexpected argument: {other}"));
+                    if config_path.is_some() {
+                        return Err(format!("unexpected argument: {other}"));
+                    }
+                    config_path = Some(PathBuf::from(other));
+                    config_arg = Some(index);
+                    index += 1;
                 }
             }
         }
 
-        if let Some(path) = config_path {
-            let loaded = load_file(&path)?;
-            config.apply(loaded);
-            config.config_file = Some(path);
+        let mut config = if let Some(path) = &config_path {
+            load_file(path)?
+        } else {
+            Config::default()
+        };
+        config.config_file = config_path;
+
+        // Second pass: command-line values override the file.
+        let mut index = 1;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--config" => index += 2,
+                "--port" => {
+                    config.port = parse_port(
+                        args.get(index + 1)
+                            .ok_or_else(|| "--port requires a value".to_string())?,
+                    )?;
+                    index += 2;
+                }
+                "--bind" => {
+                    config.bind = args
+                        .get(index + 1)
+                        .ok_or_else(|| "--bind requires a value".to_string())?
+                        .clone();
+                    index += 2;
+                }
+                "--databases" => {
+                    config.databases = parse_count(
+                        args.get(index + 1)
+                            .ok_or_else(|| "--databases requires a value".to_string())?,
+                        "databases",
+                    )?;
+                    index += 2;
+                }
+                "--requirepass" => {
+                    config.requirepass = Some(
+                        args.get(index + 1)
+                            .ok_or_else(|| "--requirepass requires a value".to_string())?
+                            .clone(),
+                    );
+                    index += 2;
+                }
+                _ if config_arg == Some(index) => index += 1,
+                _ => index += 1,
+            }
         }
         config.validate()?;
         Ok(Startup::Run(config))
-    }
-
-    fn apply(&mut self, other: Config) {
-        // Only apply values explicitly present in the file. `other` starts
-        // from defaults, so this is a straightforward merge for P0.
-        if other.bind != Config::default().bind {
-            self.bind = other.bind;
-        }
-        if other.port != Config::default().port {
-            self.port = other.port;
-        }
-        if other.databases != Config::default().databases {
-            self.databases = other.databases;
-        }
-        if other.server_threads != Config::default().server_threads {
-            self.server_threads = other.server_threads;
-        }
-        if other.requirepass.is_some() {
-            self.requirepass = other.requirepass;
-        }
-        if other.dir != Config::default().dir {
-            self.dir = other.dir;
-        }
-        if other.logfile.is_some() {
-            self.logfile = other.logfile;
-        }
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -316,5 +322,54 @@ save 900 1
     fn rejects_zero_databases() {
         let err = parse_str("databases 0\n").unwrap_err();
         assert!(err.contains("databases"));
+    }
+
+    #[test]
+    fn cli_overrides_config_file_and_positional_path() {
+        let path = std::env::temp_dir().join(format!(
+            "rekeydb-config-test-{}-{}.conf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, "port 6380\nserver-threads 3\n").unwrap();
+
+        let config = match Config::from_args([
+            "rekeydb".to_string(),
+            "--port".to_string(),
+            "6381".to_string(),
+            path.display().to_string(),
+        ])
+        .unwrap()
+        {
+            Startup::Run(config) => config,
+            other => panic!("unexpected startup: {other:?}"),
+        };
+        assert_eq!(config.port, 6381);
+        assert_eq!(config.server_threads, 3);
+        assert_eq!(config.config_file.as_deref(), Some(path.as_path()));
+
+        let config = match Config::from_args([
+            "rekeydb".to_string(),
+            "--config".to_string(),
+            path.display().to_string(),
+            "--port".to_string(),
+            "6382".to_string(),
+        ])
+        .unwrap()
+        {
+            Startup::Run(config) => config,
+            other => panic!("unexpected startup: {other:?}"),
+        };
+        assert_eq!(config.port, 6382);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn missing_option_value_is_an_error() {
+        let err = Config::from_args(["rekeydb", "--port"]).unwrap_err();
+        assert!(err.contains("--port"));
     }
 }

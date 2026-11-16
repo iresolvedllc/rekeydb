@@ -355,47 +355,79 @@ fn parse_command(input: &[u8], limits: &Limits) -> Result<Option<(Command, usize
     if input.is_empty() {
         return Ok(None);
     }
-    if input[0] == b'*' {
-        let Some((value, consumed)) = parse_value(input, 0, limits)? else {
+    if input[0] != b'*' {
+        // Inline command. Redis accepts inline commands for telnet-style use.
+        let Some((line, consumed)) = take_line(input)? else {
             return Ok(None);
         };
-        let RespValue::Array(values) = value else {
-            return Err(ParseError::Protocol(ProtocolError::new(
-                "expected an array of bulk strings",
-            )));
-        };
-        if values.is_empty() {
-            return Err(ParseError::Protocol(ProtocolError::new(
-                "empty command array",
-            )));
-        }
-        let mut args = Vec::with_capacity(values.len());
-        for value in values {
-            match value {
-                RespValue::BulkString(arg) => args.push(arg),
-                RespValue::SimpleString(arg) => args.push(arg),
-                RespValue::Integer(arg) => args.push(arg.to_string().into_bytes()),
-                _ => {
-                    return Err(ParseError::Protocol(ProtocolError::new(
-                        "expected a bulk string in command array",
-                    )));
-                }
-            }
-        }
+        let args = split_inline(line)?;
         return Ok(Some((Command::new(args), consumed)));
     }
 
-    // Inline command. Redis accepts inline commands for telnet-style use.
-    let Some((line, consumed)) = take_line(input)? else {
+    let Some((line, consumed)) = take_line(&input[1..])? else {
         return Ok(None);
     };
-    let args = split_inline(line)?;
-    if args.is_empty() {
-        // A blank inline line is ignored, not an error. Consume it and ask the
-        // caller for another command.
-        return Ok(Some((Command::new(Vec::new()), consumed)));
+    let count = parse_i64(line)
+        .map_err(|_| ParseError::Protocol(ProtocolError::new("invalid multibulk length")))?;
+    if count <= 0 {
+        // Redis treats a non-positive multibulk length as an empty request.
+        return Ok(Some((Command::new(Vec::new()), consumed + 1)));
     }
-    Ok(Some((Command::new(args), consumed)))
+    let count = usize::try_from(count)
+        .map_err(|_| ParseError::Protocol(ProtocolError::new("invalid multibulk length")))?;
+    if count > limits.max_elements {
+        return Err(ParseError::Protocol(ProtocolError::new(
+            "invalid multibulk length",
+        )));
+    }
+
+    let mut offset = consumed + 1;
+    let mut args = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        if offset >= input.len() {
+            return Ok(None);
+        }
+        let prefix = input[offset];
+        if prefix != b'$' {
+            let got = if prefix.is_ascii_graphic() {
+                (prefix as char).to_string()
+            } else {
+                format!("\\x{prefix:02x}")
+            };
+            return Err(ParseError::Protocol(ProtocolError::new(format!(
+                "expected '$', got '{got}'"
+            ))));
+        }
+        let Some((length_line, used)) = take_line(&input[offset + 1..])? else {
+            return Ok(None);
+        };
+        let length = parse_i64(length_line)
+            .map_err(|_| ParseError::Protocol(ProtocolError::new("invalid bulk length")))?;
+        if length < 0 {
+            return Err(ParseError::Protocol(ProtocolError::new(
+                "invalid bulk length",
+            )));
+        }
+        let length = usize::try_from(length)
+            .map_err(|_| ParseError::Protocol(ProtocolError::new("invalid bulk length")))?;
+        if length > limits.max_bulk_len {
+            return Err(ParseError::Protocol(ProtocolError::new(
+                "invalid bulk length",
+            )));
+        }
+        let start = offset + 1 + used;
+        if input.len() < start + length + 2 {
+            return Ok(None);
+        }
+        if &input[start + length..start + length + 2] != b"\r\n" {
+            return Err(ParseError::Protocol(ProtocolError::new(
+                "invalid bulk string terminator",
+            )));
+        }
+        args.push(input[start..start + length].to_vec());
+        offset = start + length + 2;
+    }
+    Ok(Some((Command::new(args), offset)))
 }
 
 fn parse_value(
@@ -466,7 +498,7 @@ fn parse_value(
                 return Ok(None);
             };
             let count = parse_i64(line)?;
-            if count == -1 && prefix == b'*' {
+            if count < 0 && prefix == b'*' {
                 return Ok(Some((RespValue::NullArray, consumed + 1)));
             }
             let count = usize::try_from(count).map_err(|_| {

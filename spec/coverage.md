@@ -20,7 +20,7 @@ Implemented: 46 / 236
 | @stream | 0 | 15 |
 | @string | 12 | 22 |
 | @transaction | 0 | 5 |
-| uncategorized | 3 | 28 |
+| uncategorized | 4 | 28 |
 
 ## Missing
 
@@ -146,7 +146,6 @@ Implemented: 46 / 236
 - `monitor`
 - `slaveof`
 - `replicaof`
-- `debug`
 - `subscribe`
 - `unsubscribe`
 - `psubscribe`

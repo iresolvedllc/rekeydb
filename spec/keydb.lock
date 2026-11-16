@@ -15,11 +15,6 @@
     "fnv64": "b0c013bb83f47db1"
   },
   {
-    "path": "src/.gitignore",
-    "bytes": 53,
-    "fnv64": "7f5a147c7bc08c6d"
-  },
-  {
     "path": "src/AsyncWorkQueue.cpp",
     "bytes": 3319,
     "fnv64": "8fc884ef6fd0a3cf"
@@ -490,19 +485,9 @@
     "fnv64": "d4cd2c461ed52bdc"
   },
   {
-    "path": "src/modules/.gitignore",
-    "bytes": 10,
-    "fnv64": "d7f58c504aecb70a"
-  },
-  {
     "path": "src/modules/Makefile",
     "bytes": 1554,
     "fnv64": "be1a6626321d07f8"
-  },
-  {
-    "path": "src/modules/gendoc.rb",
-    "bytes": 5754,
-    "fnv64": "3df308b81c2c6dd2"
   },
   {
     "path": "src/modules/helloacl.c",
@@ -720,11 +705,6 @@
     "fnv64": "9eecb56eef144730"
   },
   {
-    "path": "src/redis-trib.rb",
-    "bytes": 3600,
-    "fnv64": "d20ed72c7eeb868d"
-  },
-  {
     "path": "src/redisassert.h",
     "bytes": 2525,
     "fnv64": "ca5c2c815952225d"
@@ -738,6 +718,11 @@
     "path": "src/release.c",
     "bytes": 2596,
     "fnv64": "7bd52f8c70d2e855"
+  },
+  {
+    "path": "src/release.h",
+    "bytes": 100,
+    "fnv64": "0ccf06af29bd8cef"
   },
   {
     "path": "src/replication.cpp",
@@ -1010,11 +995,6 @@
     "fnv64": "a1c66b76c27fd48d"
   },
   {
-    "path": "src/valgrind.sup",
-    "bytes": 392,
-    "fnv64": "4ac819180ebc7354"
-  },
-  {
     "path": "src/version.h",
     "bytes": 539,
     "fnv64": "8ae066fdb97731b7"
@@ -1080,11 +1060,6 @@
     "fnv64": "18d9bd458e59fe9b"
   },
   {
-    "path": "tests/assets/nodefaultuser.acl",
-    "bytes": 60,
-    "fnv64": "57fd187c14e5a1e4"
-  },
-  {
     "path": "tests/assets/redis-module-save.rdb",
     "bytes": 214,
     "fnv64": "6cc9859060549ff3"
@@ -1093,11 +1068,6 @@
     "path": "tests/assets/redis-save.rdb",
     "bytes": 247,
     "fnv64": "3154a453e7b421a4"
-  },
-  {
-    "path": "tests/assets/user.acl",
-    "bytes": 113,
-    "fnv64": "820d30f8a3e2e5b3"
   },
   {
     "path": "tests/cluster/cluster.tcl",
@@ -1240,11 +1210,6 @@
     "fnv64": "1b819b91864ccbde"
   },
   {
-    "path": "tests/cluster/tmp/.gitignore",
-    "bytes": 19,
-    "fnv64": "ea358e7387034e93"
-  },
-  {
     "path": "tests/helpers/bg_block_op.tcl",
     "bytes": 1546,
     "fnv64": "0c3fdfa81e43f4d9"
@@ -1348,11 +1313,6 @@
     "path": "tests/integration/psync2.tcl",
     "bytes": 14917,
     "fnv64": "f483b3fc0089abcd"
-  },
-  {
-    "path": "tests/integration/rdb-repl-tests",
-    "bytes": 188,
-    "fnv64": "59261a3bebd3f7e8"
   },
   {
     "path": "tests/integration/rdb.tcl",
@@ -1620,11 +1580,6 @@
     "fnv64": "79f34e33bf2ee0f8"
   },
   {
-    "path": "tests/sentinel/tmp/.gitignore",
-    "bytes": 19,
-    "fnv64": "ea358e7387034e93"
-  },
-  {
     "path": "tests/support/benchmark.tcl",
     "bytes": 541,
     "fnv64": "93eb276c79afb1e6"
@@ -1670,11 +1625,6 @@
     "fnv64": "a9fa130dc32d2d96"
   },
   {
-    "path": "tests/tmp/.gitignore",
-    "bytes": 2,
-    "fnv64": "9b9e73d32804f667"
-  },
-  {
     "path": "tests/unit/acl.tcl",
     "bytes": 21683,
     "fnv64": "df4e5e305d33b844"
@@ -1718,11 +1668,6 @@
     "path": "tests/unit/flash.tcl",
     "bytes": 12446,
     "fnv64": "5634ba7fef272cc6"
-  },
-  {
-    "path": "tests/unit/flash.tcl.save",
-    "bytes": 1473,
-    "fnv64": "f7a6b5332e5b3561"
   },
   {
     "path": "tests/unit/geo.tcl",

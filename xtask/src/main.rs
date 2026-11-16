@@ -245,12 +245,45 @@ fn visit_files(root: &Path, path: &Path, out: &mut Vec<LockEntry>) -> Result<(),
         let entry = entry.map_err(|err| err.to_string())?;
         let path = entry.path();
         if path.is_dir() {
+            if path.file_name().is_some_and(|name| name == "tmp") {
+                continue;
+            }
             visit_files(root, &path, out)?;
-        } else if path.is_file() {
+        } else if path.is_file() && should_lock(&path) {
             out.push(lock_entry(root, &path)?);
         }
     }
     Ok(())
+}
+
+/// Keep the lock stable across local oracle builds. Object files, generated
+/// release headers, and module binaries are build products, not specification
+/// inputs.
+fn should_lock(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if matches!(name, "Makefile" | "COPYING" | "keydb.conf" | "README.md") {
+        return true;
+    }
+    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    matches!(
+        extension,
+        "c" | "cpp"
+            | "h"
+            | "hpp"
+            | "asm"
+            | "sh"
+            | "tcl"
+            | "conf"
+            | "txt"
+            | "md"
+            | "py"
+            | "rdb"
+            | "aof"
+            | "json"
+    )
 }
 
 fn lock_entry(root: &Path, path: &Path) -> Result<LockEntry, String> {

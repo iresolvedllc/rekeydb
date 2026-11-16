@@ -45,8 +45,13 @@ impl Client {
 
 pub fn run(config: Config) -> Result<(), String> {
     let address = resolve_address(&config)?;
-    let mut listener =
-        TcpListener::bind(address).map_err(|err| format!("cannot bind {address}: {err}"))?;
+    let mut listener = match TcpListener::bind(address) {
+        Ok(listener) => listener,
+        Err(err) => {
+            eprintln!("Failed listening on port {}: {err}", config.port);
+            return Err(format!("cannot bind {address}: {err}"));
+        }
+    };
     let local = listener
         .local_addr()
         .map_err(|err| format!("cannot read listener address: {err}"))?;
@@ -69,12 +74,15 @@ pub fn run(config: Config) -> Result<(), String> {
         next_token: 1,
         next_client_id: 1,
         running: true,
+        trace_commands: std::env::var_os("REKEYDB_TRACE_COMMANDS").is_some(),
     };
-    eprintln!(
+    println!("rekeydb PID: {}", std::process::id());
+    println!(
         "rekeydb {} listening on {local} (server-threads={})",
         env!("CARGO_PKG_VERSION"),
         config.server_threads
     );
+    println!("Thread 0 alive");
     server.run()
 }
 
@@ -87,6 +95,7 @@ struct Server {
     next_token: usize,
     next_client_id: u64,
     running: bool,
+    trace_commands: bool,
 }
 
 impl Server {
@@ -189,46 +198,46 @@ impl Server {
             close = true;
         }
 
-        if !close {
-            let mut commands = Vec::new();
-            loop {
-                match client.decoder.next_command() {
-                    Ok(Some(command)) => {
-                        if !command.args.is_empty() {
-                            commands.push(command);
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(err) => {
-                        append_protocol_error(&mut client.out, &err);
-                        close = true;
-                        break;
+        let mut commands = Vec::new();
+        loop {
+            match client.decoder.next_command() {
+                Ok(Some(command)) => {
+                    if !command.args.is_empty() {
+                        commands.push(command);
                     }
                 }
+                Ok(None) => break,
+                Err(err) => {
+                    append_protocol_error(&mut client.out, &err);
+                    close = true;
+                    break;
+                }
             }
+        }
 
-            if !commands.is_empty() {
-                let mut state = self.state.lock().expect("state poisoned");
-                state.stats_mut().total_net_input_bytes += input_bytes as u64;
-                for command in commands {
-                    let outcome = state.execute(&command, &mut client.ctx);
-                    outcome.reply.encode(client.ctx.version, &mut client.out);
-                    if outcome.close {
-                        close = true;
-                    }
-                    if outcome.shutdown {
-                        client.shutdown_after_flush = true;
-                        close = true;
-                    }
+        if !commands.is_empty() {
+            let mut state = self.state.lock().expect("state poisoned");
+            for command in commands {
+                if self.trace_commands {
+                    eprintln!("cmd[{}]: {:?}", client.ctx.id, command.args);
                 }
-                drop(state);
-            } else {
-                self.state
-                    .lock()
-                    .expect("state poisoned")
-                    .stats_mut()
-                    .total_net_input_bytes += input_bytes as u64;
+                let outcome = state.execute(&command, &mut client.ctx);
+                outcome.reply.encode(client.ctx.version, &mut client.out);
+                if outcome.close {
+                    close = true;
+                }
+                if outcome.shutdown {
+                    client.shutdown_after_flush = true;
+                    close = true;
+                }
             }
+            state.stats_mut().total_net_input_bytes += input_bytes as u64;
+        } else {
+            self.state
+                .lock()
+                .expect("state poisoned")
+                .stats_mut()
+                .total_net_input_bytes += input_bytes as u64;
         }
 
         if client.out.len() > MAX_OUTPUT_BUFFER {
