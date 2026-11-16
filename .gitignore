@@ -1,0 +1,11 @@
+/target
+/zig-out
+/zig/zig-out
+/zig/rekeydb-cli
+/.zig-cache
+/KeyDB/
+/reference/keydb/
+/tests/tmp
+/bench/results
+*.log
+.DS_Store

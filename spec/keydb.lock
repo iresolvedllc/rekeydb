@@ -1,0 +1,2097 @@
+[
+  {
+    "path": "COPYING",
+    "bytes": 1602,
+    "fnv64": "01139730dc2e06d4"
+  },
+  {
+    "path": "Makefile",
+    "bytes": 211,
+    "fnv64": "49a8a664759d3a10"
+  },
+  {
+    "path": "keydb.conf",
+    "bytes": 96964,
+    "fnv64": "b0c013bb83f47db1"
+  },
+  {
+    "path": "src/.gitignore",
+    "bytes": 53,
+    "fnv64": "7f5a147c7bc08c6d"
+  },
+  {
+    "path": "src/AsyncWorkQueue.cpp",
+    "bytes": 3319,
+    "fnv64": "8fc884ef6fd0a3cf"
+  },
+  {
+    "path": "src/AsyncWorkQueue.h",
+    "bytes": 954,
+    "fnv64": "96f40459fda97f60"
+  },
+  {
+    "path": "src/IStorage.h",
+    "bytes": 2322,
+    "fnv64": "1c91a5fb8d7d0d85"
+  },
+  {
+    "path": "src/Makefile",
+    "bytes": 19909,
+    "fnv64": "19ee8ded3df49adf"
+  },
+  {
+    "path": "src/SnapshotPayloadParseState.cpp",
+    "bytes": 13048,
+    "fnv64": "6ccdcee88d7f8286"
+  },
+  {
+    "path": "src/SnapshotPayloadParseState.h",
+    "bytes": 1695,
+    "fnv64": "34d66234f9220b4f"
+  },
+  {
+    "path": "src/StorageCache.cpp",
+    "bytes": 7262,
+    "fnv64": "4091f2a9880f5267"
+  },
+  {
+    "path": "src/StorageCache.h",
+    "bytes": 2760,
+    "fnv64": "5ea239002478930e"
+  },
+  {
+    "path": "src/acl.cpp",
+    "bytes": 90655,
+    "fnv64": "b94b1196bef9b95d"
+  },
+  {
+    "path": "src/adlist.c",
+    "bytes": 10839,
+    "fnv64": "a78cb9d2fa6d6b3d"
+  },
+  {
+    "path": "src/adlist.h",
+    "bytes": 3642,
+    "fnv64": "b5ee4a4cfef2865f"
+  },
+  {
+    "path": "src/ae.cpp",
+    "bytes": 28308,
+    "fnv64": "5f97ef05f1274cfd"
+  },
+  {
+    "path": "src/ae.h",
+    "bytes": 7180,
+    "fnv64": "af9b64a81ca8b327"
+  },
+  {
+    "path": "src/ae_epoll.cpp",
+    "bytes": 5118,
+    "fnv64": "a2921995cda088e6"
+  },
+  {
+    "path": "src/ae_evport.c",
+    "bytes": 11032,
+    "fnv64": "1d9b1a3d9e043121"
+  },
+  {
+    "path": "src/ae_kqueue.c",
+    "bytes": 6898,
+    "fnv64": "a16487a5bf11005e"
+  },
+  {
+    "path": "src/ae_select.c",
+    "bytes": 3842,
+    "fnv64": "20e61c46967d1985"
+  },
+  {
+    "path": "src/aelocker.h",
+    "bytes": 1803,
+    "fnv64": "aae820bafb275a89"
+  },
+  {
+    "path": "src/anet.c",
+    "bytes": 19933,
+    "fnv64": "7d5ad023dce99196"
+  },
+  {
+    "path": "src/anet.h",
+    "bytes": 3403,
+    "fnv64": "4ead5637720d72be"
+  },
+  {
+    "path": "src/aof.cpp",
+    "bytes": 84705,
+    "fnv64": "17271f47273ebe70"
+  },
+  {
+    "path": "src/asciilogo.h",
+    "bytes": 2894,
+    "fnv64": "f6747fcf15a26012"
+  },
+  {
+    "path": "src/atomicvar.h",
+    "bytes": 6943,
+    "fnv64": "b9989234573eaf34"
+  },
+  {
+    "path": "src/bio.cpp",
+    "bytes": 12091,
+    "fnv64": "6778046b83eea370"
+  },
+  {
+    "path": "src/bio.h",
+    "bytes": 2302,
+    "fnv64": "0e096f1c70d101d4"
+  },
+  {
+    "path": "src/bitops.cpp",
+    "bytes": 46405,
+    "fnv64": "c5a2b2542ef08943"
+  },
+  {
+    "path": "src/blocked.cpp",
+    "bytes": 34955,
+    "fnv64": "928ed778772ae1f4"
+  },
+  {
+    "path": "src/childinfo.cpp",
+    "bytes": 7055,
+    "fnv64": "9b8831b5c7873f26"
+  },
+  {
+    "path": "src/cli_common.c",
+    "bytes": 6513,
+    "fnv64": "3aa48b297c253cf2"
+  },
+  {
+    "path": "src/cli_common.h",
+    "bytes": 1688,
+    "fnv64": "d2e681e4abc4ef48"
+  },
+  {
+    "path": "src/cluster.cpp",
+    "bytes": 252376,
+    "fnv64": "2b7240fa7cd123f8"
+  },
+  {
+    "path": "src/cluster.h",
+    "bytes": 14918,
+    "fnv64": "35d0dd153edb4ea6"
+  },
+  {
+    "path": "src/compactvector.h",
+    "bytes": 4185,
+    "fnv64": "e882cc20cd166fbd"
+  },
+  {
+    "path": "src/config.cpp",
+    "bytes": 135988,
+    "fnv64": "6a0fd931035e2f5f"
+  },
+  {
+    "path": "src/config.h",
+    "bytes": 8428,
+    "fnv64": "fcb1edb41413c21c"
+  },
+  {
+    "path": "src/connection.cpp",
+    "bytes": 16350,
+    "fnv64": "0209ea1722701aa1"
+  },
+  {
+    "path": "src/connection.h",
+    "bytes": 10518,
+    "fnv64": "b2229329cb9879dd"
+  },
+  {
+    "path": "src/connhelpers.h",
+    "bytes": 3324,
+    "fnv64": "ae189e61fad3e84c"
+  },
+  {
+    "path": "src/cowptr.h",
+    "bytes": 1028,
+    "fnv64": "0e72fb031a4a9f63"
+  },
+  {
+    "path": "src/crc16.c",
+    "bytes": 4479,
+    "fnv64": "24bedfe30520d31d"
+  },
+  {
+    "path": "src/crc16_slottable.h",
+    "bytes": 112334,
+    "fnv64": "3218d4a932d132b7"
+  },
+  {
+    "path": "src/crc64.c",
+    "bytes": 6143,
+    "fnv64": "f2853dceff6947cc"
+  },
+  {
+    "path": "src/crc64.h",
+    "bytes": 299,
+    "fnv64": "af873bbcd242ef10"
+  },
+  {
+    "path": "src/crcspeed.c",
+    "bytes": 9220,
+    "fnv64": "3f1b44816fd1c6df"
+  },
+  {
+    "path": "src/crcspeed.h",
+    "bytes": 2893,
+    "fnv64": "9c7935f275d30913"
+  },
+  {
+    "path": "src/cron.cpp",
+    "bytes": 5433,
+    "fnv64": "b1023716fdef9a0d"
+  },
+  {
+    "path": "src/cron.h",
+    "bytes": 345,
+    "fnv64": "f3000d037916a25a"
+  },
+  {
+    "path": "src/db.cpp",
+    "bytes": 118612,
+    "fnv64": "173a432e3d96606a"
+  },
+  {
+    "path": "src/debug.cpp",
+    "bytes": 85770,
+    "fnv64": "880ece8d80df6b2d"
+  },
+  {
+    "path": "src/debugmacro.h",
+    "bytes": 2355,
+    "fnv64": "39917681be1a70f1"
+  },
+  {
+    "path": "src/defrag.cpp",
+    "bytes": 46635,
+    "fnv64": "288acd8b3bcb7515"
+  },
+  {
+    "path": "src/dict.cpp",
+    "bytes": 57839,
+    "fnv64": "afc7d5cd72c3bc0d"
+  },
+  {
+    "path": "src/dict.h",
+    "bytes": 10190,
+    "fnv64": "2f1e8d7ae902c9a4"
+  },
+  {
+    "path": "src/endianconv.c",
+    "bytes": 3853,
+    "fnv64": "8adc644d5a74f386"
+  },
+  {
+    "path": "src/endianconv.h",
+    "bytes": 3020,
+    "fnv64": "2b16f134b4f43e4e"
+  },
+  {
+    "path": "src/evict.cpp",
+    "bytes": 40345,
+    "fnv64": "9519505d82cfc5d1"
+  },
+  {
+    "path": "src/expire.cpp",
+    "bytes": 37726,
+    "fnv64": "2c227f09b0895182"
+  },
+  {
+    "path": "src/expire.h",
+    "bytes": 9279,
+    "fnv64": "8b2da456d539beba"
+  },
+  {
+    "path": "src/fastlock.cpp",
+    "bytes": 16436,
+    "fnv64": "6f9f3da968aed51e"
+  },
+  {
+    "path": "src/fastlock.h",
+    "bytes": 2146,
+    "fnv64": "243241369d01bac2"
+  },
+  {
+    "path": "src/fastlock_x64.asm",
+    "bytes": 6935,
+    "fnv64": "37b30d46a2f7ba34"
+  },
+  {
+    "path": "src/fmacros.h",
+    "bytes": 2440,
+    "fnv64": "9be77a606a49586d"
+  },
+  {
+    "path": "src/gc.h",
+    "bytes": 3761,
+    "fnv64": "3da1bf09904aaa1a"
+  },
+  {
+    "path": "src/geo.cpp",
+    "bytes": 37860,
+    "fnv64": "fe74aa699384ace1"
+  },
+  {
+    "path": "src/geo.h",
+    "bytes": 405,
+    "fnv64": "62365ff284ce6bf1"
+  },
+  {
+    "path": "src/geohash.c",
+    "bytes": 10219,
+    "fnv64": "54b24f72f8da31b5"
+  },
+  {
+    "path": "src/geohash.h",
+    "bytes": 4656,
+    "fnv64": "8366ff73a06accf1"
+  },
+  {
+    "path": "src/geohash_helper.cpp",
+    "bytes": 11006,
+    "fnv64": "68f72fccca81b2e2"
+  },
+  {
+    "path": "src/geohash_helper.h",
+    "bytes": 3092,
+    "fnv64": "c0de79231db1abc5"
+  },
+  {
+    "path": "src/help.h",
+    "bytes": 38466,
+    "fnv64": "2cf37c7a84dbfc56"
+  },
+  {
+    "path": "src/hyperloglog.cpp",
+    "bytes": 58964,
+    "fnv64": "f2e086dc52522da4"
+  },
+  {
+    "path": "src/intset.c",
+    "bytes": 17797,
+    "fnv64": "93824766762d2109"
+  },
+  {
+    "path": "src/intset.h",
+    "bytes": 2590,
+    "fnv64": "37989172a2ab2afb"
+  },
+  {
+    "path": "src/keydb-diagnostic-tool.cpp",
+    "bytes": 34976,
+    "fnv64": "ba4c5cba7440a6d4"
+  },
+  {
+    "path": "src/keydbutils.cpp",
+    "bytes": 189,
+    "fnv64": "ab9fbc1823362d45"
+  },
+  {
+    "path": "src/latency.cpp",
+    "bytes": 28100,
+    "fnv64": "a82428e2258fdeac"
+  },
+  {
+    "path": "src/latency.h",
+    "bytes": 4028,
+    "fnv64": "a3bfb0206c1cb225"
+  },
+  {
+    "path": "src/lazyfree.cpp",
+    "bytes": 9273,
+    "fnv64": "3f4bee65a307c18e"
+  },
+  {
+    "path": "src/listpack.c",
+    "bytes": 36449,
+    "fnv64": "ce1389fe819a0c81"
+  },
+  {
+    "path": "src/listpack.h",
+    "bytes": 3128,
+    "fnv64": "1a797860d4564afe"
+  },
+  {
+    "path": "src/listpack_malloc.h",
+    "bytes": 2251,
+    "fnv64": "7d62cce45e9d7185"
+  },
+  {
+    "path": "src/localtime.c",
+    "bytes": 5676,
+    "fnv64": "315f0e2d3e99ac25"
+  },
+  {
+    "path": "src/lolwut.c",
+    "bytes": 7293,
+    "fnv64": "1c9055679c8c34c1"
+  },
+  {
+    "path": "src/lolwut.h",
+    "bytes": 2602,
+    "fnv64": "38a650661e1914f2"
+  },
+  {
+    "path": "src/lolwut5.c",
+    "bytes": 7515,
+    "fnv64": "c878f7e4164848f3"
+  },
+  {
+    "path": "src/lolwut6.c",
+    "bytes": 8091,
+    "fnv64": "6a78a8dff9806911"
+  },
+  {
+    "path": "src/lzf.h",
+    "bytes": 4476,
+    "fnv64": "3cbcdce57b211f48"
+  },
+  {
+    "path": "src/lzfP.h",
+    "bytes": 5874,
+    "fnv64": "2b10077f762b3054"
+  },
+  {
+    "path": "src/lzf_c.c",
+    "bytes": 9012,
+    "fnv64": "56bc34855b49ca10"
+  },
+  {
+    "path": "src/lzf_d.c",
+    "bytes": 6456,
+    "fnv64": "824bbe1fe39308fe"
+  },
+  {
+    "path": "src/meminfo.cpp",
+    "bytes": 689,
+    "fnv64": "44339a314569af69"
+  },
+  {
+    "path": "src/memtest.c",
+    "bytes": 13526,
+    "fnv64": "bbdcb56657f936c6"
+  },
+  {
+    "path": "src/mkreleasehdr.sh",
+    "bytes": 735,
+    "fnv64": "ebf2f8ca12d6cc85"
+  },
+  {
+    "path": "src/module.cpp",
+    "bytes": 392838,
+    "fnv64": "d4cd2c461ed52bdc"
+  },
+  {
+    "path": "src/modules/.gitignore",
+    "bytes": 10,
+    "fnv64": "d7f58c504aecb70a"
+  },
+  {
+    "path": "src/modules/Makefile",
+    "bytes": 1554,
+    "fnv64": "be1a6626321d07f8"
+  },
+  {
+    "path": "src/modules/gendoc.rb",
+    "bytes": 5754,
+    "fnv64": "3df308b81c2c6dd2"
+  },
+  {
+    "path": "src/modules/helloacl.c",
+    "bytes": 7374,
+    "fnv64": "154eeb9fb68a3f47"
+  },
+  {
+    "path": "src/modules/helloblock.c",
+    "bytes": 9255,
+    "fnv64": "5bf1c443da5d3ff5"
+  },
+  {
+    "path": "src/modules/hellocluster.c",
+    "bytes": 5277,
+    "fnv64": "74c8871a0f382187"
+  },
+  {
+    "path": "src/modules/hellodict.c",
+    "bytes": 5279,
+    "fnv64": "81fef4604bccaf58"
+  },
+  {
+    "path": "src/modules/hellohook.c",
+    "bytes": 3808,
+    "fnv64": "2238662aaf689681"
+  },
+  {
+    "path": "src/modules/hellotimer.c",
+    "bytes": 3213,
+    "fnv64": "6325f12cfc7c1c31"
+  },
+  {
+    "path": "src/modules/hellotype.c",
+    "bytes": 13471,
+    "fnv64": "2ed5867cc7700a98"
+  },
+  {
+    "path": "src/modules/helloworld.c",
+    "bytes": 24576,
+    "fnv64": "964c375fc964fab2"
+  },
+  {
+    "path": "src/modules/keydb_modstatsd/Makefile",
+    "bytes": 338,
+    "fnv64": "34ebe0f022c850c1"
+  },
+  {
+    "path": "src/modules/keydb_modstatsd/modmain.cpp",
+    "bytes": 33834,
+    "fnv64": "8a478ecb82e1807f"
+  },
+  {
+    "path": "src/modules/keydb_modstatsd/redismodule.h",
+    "bytes": 66854,
+    "fnv64": "b3869f0e368b6a7c"
+  },
+  {
+    "path": "src/monotonic.c",
+    "bytes": 5536,
+    "fnv64": "e71a5403745e397f"
+  },
+  {
+    "path": "src/monotonic.h",
+    "bytes": 1935,
+    "fnv64": "c9a75888e297d286"
+  },
+  {
+    "path": "src/motd.cpp",
+    "bytes": 3981,
+    "fnv64": "39fce2ccddb81528"
+  },
+  {
+    "path": "src/motd.h",
+    "bytes": 221,
+    "fnv64": "a8c555f4d05e9ed2"
+  },
+  {
+    "path": "src/mt19937-64.c",
+    "bytes": 6059,
+    "fnv64": "7ed813bc5b45da03"
+  },
+  {
+    "path": "src/mt19937-64.h",
+    "bytes": 3387,
+    "fnv64": "e53a0501ddeeb39c"
+  },
+  {
+    "path": "src/multi.cpp",
+    "bytes": 16038,
+    "fnv64": "7a830773b18d6e7e"
+  },
+  {
+    "path": "src/networking.cpp",
+    "bytes": 160807,
+    "fnv64": "4360cf8f6bba5ddd"
+  },
+  {
+    "path": "src/new.cpp",
+    "bytes": 812,
+    "fnv64": "2937d1adcfc87481"
+  },
+  {
+    "path": "src/new.h",
+    "bytes": 281,
+    "fnv64": "935c1c9d88629a5b"
+  },
+  {
+    "path": "src/notify.cpp",
+    "bytes": 6105,
+    "fnv64": "247a54d7e3d42a60"
+  },
+  {
+    "path": "src/object.cpp",
+    "bytes": 66103,
+    "fnv64": "97ded08c90125565"
+  },
+  {
+    "path": "src/pqsort.c",
+    "bytes": 5537,
+    "fnv64": "00d506b0d0ad4716"
+  },
+  {
+    "path": "src/pqsort.h",
+    "bytes": 1975,
+    "fnv64": "a3a4f66cb7647b31"
+  },
+  {
+    "path": "src/pubsub.cpp",
+    "bytes": 17861,
+    "fnv64": "ec49bcbdb2a1cf62"
+  },
+  {
+    "path": "src/quicklist.c",
+    "bytes": 107953,
+    "fnv64": "feddbbbb344d795e"
+  },
+  {
+    "path": "src/quicklist.h",
+    "bytes": 9651,
+    "fnv64": "5f2ba8ef0c6fa8fe"
+  },
+  {
+    "path": "src/rand.c",
+    "bytes": 3848,
+    "fnv64": "a9b69f7e7abc53d2"
+  },
+  {
+    "path": "src/rand.h",
+    "bytes": 1832,
+    "fnv64": "a2845a27390d0d69"
+  },
+  {
+    "path": "src/rax.c",
+    "bytes": 76556,
+    "fnv64": "88d51dbcc407ce46"
+  },
+  {
+    "path": "src/rax.h",
+    "bytes": 9818,
+    "fnv64": "86a659b6d6528bbd"
+  },
+  {
+    "path": "src/rax_malloc.h",
+    "bytes": 2146,
+    "fnv64": "791f57f7d8e08dd7"
+  },
+  {
+    "path": "src/rdb-s3.cpp",
+    "bytes": 2553,
+    "fnv64": "a745e663481ffff3"
+  },
+  {
+    "path": "src/rdb.cpp",
+    "bytes": 158716,
+    "fnv64": "0fe3ca2faef642a0"
+  },
+  {
+    "path": "src/rdb.h",
+    "bytes": 8634,
+    "fnv64": "acad2af38ec16923"
+  },
+  {
+    "path": "src/readwritelock.h",
+    "bytes": 3142,
+    "fnv64": "05d6b3113cfe19da"
+  },
+  {
+    "path": "src/redis-benchmark.cpp",
+    "bytes": 79209,
+    "fnv64": "8b86f34d9a77f057"
+  },
+  {
+    "path": "src/redis-check-aof.cpp",
+    "bytes": 7271,
+    "fnv64": "6c0ff2878e33744c"
+  },
+  {
+    "path": "src/redis-check-rdb.cpp",
+    "bytes": 14908,
+    "fnv64": "909ebe15829d47a9"
+  },
+  {
+    "path": "src/redis-cli-cpphelper.cpp",
+    "bytes": 37375,
+    "fnv64": "bca39ae6064a6f64"
+  },
+  {
+    "path": "src/redis-cli.c",
+    "bytes": 276684,
+    "fnv64": "47790f353bc1ec99"
+  },
+  {
+    "path": "src/redis-cli.h",
+    "bytes": 10524,
+    "fnv64": "9eecb56eef144730"
+  },
+  {
+    "path": "src/redis-trib.rb",
+    "bytes": 3600,
+    "fnv64": "d20ed72c7eeb868d"
+  },
+  {
+    "path": "src/redisassert.h",
+    "bytes": 2525,
+    "fnv64": "ca5c2c815952225d"
+  },
+  {
+    "path": "src/redismodule.h",
+    "bytes": 66905,
+    "fnv64": "e3eabfcda1fdb25c"
+  },
+  {
+    "path": "src/release.c",
+    "bytes": 2596,
+    "fnv64": "7bd52f8c70d2e855"
+  },
+  {
+    "path": "src/replication.cpp",
+    "bytes": 231010,
+    "fnv64": "050578de16c5919d"
+  },
+  {
+    "path": "src/rio.cpp",
+    "bytes": 17312,
+    "fnv64": "99bb9b7979ebf683"
+  },
+  {
+    "path": "src/rio.h",
+    "bytes": 7011,
+    "fnv64": "f54b0cc84dd5f2d1"
+  },
+  {
+    "path": "src/scripting.cpp",
+    "bytes": 105788,
+    "fnv64": "c4ca8acacf4f14a6"
+  },
+  {
+    "path": "src/sds.c",
+    "bytes": 48759,
+    "fnv64": "8351cc75bab98942"
+  },
+  {
+    "path": "src/sds.h",
+    "bytes": 14013,
+    "fnv64": "099843e01b092bdb"
+  },
+  {
+    "path": "src/sdsalloc.h",
+    "bytes": 2432,
+    "fnv64": "d15c6f1f5b99956d"
+  },
+  {
+    "path": "src/sdscompat.h",
+    "bytes": 3618,
+    "fnv64": "739abceab13517ba"
+  },
+  {
+    "path": "src/semiorderedset.h",
+    "bytes": 12618,
+    "fnv64": "86ae2c4cd2d8a012"
+  },
+  {
+    "path": "src/sentinel.cpp",
+    "bytes": 206026,
+    "fnv64": "69f6822673f53533"
+  },
+  {
+    "path": "src/server.cpp",
+    "bytes": 296884,
+    "fnv64": "9f589e4ad7d91a40"
+  },
+  {
+    "path": "src/server.h",
+    "bytes": 173882,
+    "fnv64": "005c41fc01378c95"
+  },
+  {
+    "path": "src/serverassert.h",
+    "bytes": 943,
+    "fnv64": "7fddde0a3f386622"
+  },
+  {
+    "path": "src/setcpuaffinity.c",
+    "bytes": 4139,
+    "fnv64": "6b89d547c42e098e"
+  },
+  {
+    "path": "src/setproctitle.c",
+    "bytes": 8057,
+    "fnv64": "9a835c2edd2344c0"
+  },
+  {
+    "path": "src/sha1.c",
+    "bytes": 7288,
+    "fnv64": "75ac8e2ed24a6d23"
+  },
+  {
+    "path": "src/sha1.h",
+    "bytes": 650,
+    "fnv64": "2b51b97cdb752e3f"
+  },
+  {
+    "path": "src/sha256.c",
+    "bytes": 5263,
+    "fnv64": "88e4a3821ad67299"
+  },
+  {
+    "path": "src/sha256.h",
+    "bytes": 1165,
+    "fnv64": "f0b3bf95903be1dc"
+  },
+  {
+    "path": "src/siphash.c",
+    "bytes": 14091,
+    "fnv64": "d6ebfa27af843d1e"
+  },
+  {
+    "path": "src/slowlog.cpp",
+    "bytes": 8177,
+    "fnv64": "6164ca2ca95fed7b"
+  },
+  {
+    "path": "src/slowlog.h",
+    "bytes": 2447,
+    "fnv64": "039affbda1b99ecf"
+  },
+  {
+    "path": "src/snapshot.cpp",
+    "bytes": 24819,
+    "fnv64": "af736467e2575424"
+  },
+  {
+    "path": "src/solarisfixes.h",
+    "bytes": 2201,
+    "fnv64": "67865be9ee53237b"
+  },
+  {
+    "path": "src/sort.cpp",
+    "bytes": 23137,
+    "fnv64": "463a0960768f4322"
+  },
+  {
+    "path": "src/sparkline.cpp",
+    "bytes": 6657,
+    "fnv64": "8b1d0d75265eafea"
+  },
+  {
+    "path": "src/sparkline.h",
+    "bytes": 2414,
+    "fnv64": "ee15497131c448b5"
+  },
+  {
+    "path": "src/storage-lite.c",
+    "bytes": 1024,
+    "fnv64": "2337f4981b664447"
+  },
+  {
+    "path": "src/storage.cpp",
+    "bytes": 6916,
+    "fnv64": "0ab9666b58eb1d3e"
+  },
+  {
+    "path": "src/storage.h",
+    "bytes": 646,
+    "fnv64": "6f6402cc27d177ba"
+  },
+  {
+    "path": "src/storage/rocksdb.cpp",
+    "bytes": 13752,
+    "fnv64": "34e7deb8a28b5077"
+  },
+  {
+    "path": "src/storage/rocksdb.h",
+    "bytes": 3300,
+    "fnv64": "118e9a2fa18794d0"
+  },
+  {
+    "path": "src/storage/rocksdbfactor_internal.h",
+    "bytes": 1141,
+    "fnv64": "f657bfd83d37a990"
+  },
+  {
+    "path": "src/storage/rocksdbfactory.cpp",
+    "bytes": 8756,
+    "fnv64": "a154b642683c804e"
+  },
+  {
+    "path": "src/storage/rocksdbfactory.h",
+    "bytes": 136,
+    "fnv64": "f954d28d0b277f82"
+  },
+  {
+    "path": "src/storage/teststorageprovider.cpp",
+    "bytes": 2600,
+    "fnv64": "d0f575e0210d9787"
+  },
+  {
+    "path": "src/storage/teststorageprovider.h",
+    "bytes": 1754,
+    "fnv64": "68c8ea8017f51a96"
+  },
+  {
+    "path": "src/stream.h",
+    "bytes": 6969,
+    "fnv64": "db15e16102ea5e5d"
+  },
+  {
+    "path": "src/syncio.cpp",
+    "bytes": 5588,
+    "fnv64": "087c810d26ce493b"
+  },
+  {
+    "path": "src/t_hash.cpp",
+    "bytes": 43191,
+    "fnv64": "2df56881a6dacfbf"
+  },
+  {
+    "path": "src/t_list.cpp",
+    "bytes": 36360,
+    "fnv64": "8f6a9a3238a57519"
+  },
+  {
+    "path": "src/t_nhash.cpp",
+    "bytes": 12571,
+    "fnv64": "55a87341e81d40cb"
+  },
+  {
+    "path": "src/t_nhash.h",
+    "bytes": 116,
+    "fnv64": "195de64f06068e1d"
+  },
+  {
+    "path": "src/t_set.cpp",
+    "bytes": 42881,
+    "fnv64": "b8e31ee38e07a6e2"
+  },
+  {
+    "path": "src/t_stream.cpp",
+    "bytes": 146931,
+    "fnv64": "ea1a35c804b54af8"
+  },
+  {
+    "path": "src/t_string.cpp",
+    "bytes": 35726,
+    "fnv64": "f67e30af1a8bdeb1"
+  },
+  {
+    "path": "src/t_zset.cpp",
+    "bytes": 144926,
+    "fnv64": "1988764e828cf38b"
+  },
+  {
+    "path": "src/testhelp.h",
+    "bytes": 2429,
+    "fnv64": "59477b8b43c4f4fa"
+  },
+  {
+    "path": "src/timeout.cpp",
+    "bytes": 7753,
+    "fnv64": "518ec21fad915716"
+  },
+  {
+    "path": "src/tls.cpp",
+    "bytes": 46761,
+    "fnv64": "67fd1b1465902568"
+  },
+  {
+    "path": "src/tracking.cpp",
+    "bytes": 25505,
+    "fnv64": "1369ae0fae4854e2"
+  },
+  {
+    "path": "src/util.c",
+    "bytes": 30534,
+    "fnv64": "5ce62491f8aa361f"
+  },
+  {
+    "path": "src/util.h",
+    "bytes": 3296,
+    "fnv64": "6f6fe0e18ffa2b1a"
+  },
+  {
+    "path": "src/uuid.h",
+    "bytes": 425,
+    "fnv64": "a1c66b76c27fd48d"
+  },
+  {
+    "path": "src/valgrind.sup",
+    "bytes": 392,
+    "fnv64": "4ac819180ebc7354"
+  },
+  {
+    "path": "src/version.h",
+    "bytes": 539,
+    "fnv64": "8ae066fdb97731b7"
+  },
+  {
+    "path": "src/ziplist.c",
+    "bytes": 96613,
+    "fnv64": "9629063ec5c0cc46"
+  },
+  {
+    "path": "src/ziplist.h",
+    "bytes": 4061,
+    "fnv64": "45cd2f3c7ac23338"
+  },
+  {
+    "path": "src/zipmap.c",
+    "bytes": 19184,
+    "fnv64": "2e5000a44f672472"
+  },
+  {
+    "path": "src/zipmap.h",
+    "bytes": 2805,
+    "fnv64": "efa58541c4273f99"
+  },
+  {
+    "path": "src/zmalloc.cpp",
+    "bytes": 21872,
+    "fnv64": "49ae604f04606550"
+  },
+  {
+    "path": "src/zmalloc.h",
+    "bytes": 5809,
+    "fnv64": "777dcfa903dec99d"
+  },
+  {
+    "path": "tests/assets/corrupt_empty_keys.rdb",
+    "bytes": 261,
+    "fnv64": "68b1287833ddbc5b"
+  },
+  {
+    "path": "tests/assets/corrupt_ziplist.rdb",
+    "bytes": 1415,
+    "fnv64": "19f92b0581e9d97d"
+  },
+  {
+    "path": "tests/assets/default.conf",
+    "bytes": 426,
+    "fnv64": "bc0be01a3b7581ca"
+  },
+  {
+    "path": "tests/assets/encodings.rdb",
+    "bytes": 667,
+    "fnv64": "d7e45c3f4f9d79b0"
+  },
+  {
+    "path": "tests/assets/hash-zipmap.rdb",
+    "bytes": 35,
+    "fnv64": "5f0a4c744a81a19b"
+  },
+  {
+    "path": "tests/assets/minimal.conf",
+    "bytes": 130,
+    "fnv64": "18d9bd458e59fe9b"
+  },
+  {
+    "path": "tests/assets/nodefaultuser.acl",
+    "bytes": 60,
+    "fnv64": "57fd187c14e5a1e4"
+  },
+  {
+    "path": "tests/assets/redis-module-save.rdb",
+    "bytes": 214,
+    "fnv64": "6cc9859060549ff3"
+  },
+  {
+    "path": "tests/assets/redis-save.rdb",
+    "bytes": 247,
+    "fnv64": "3154a453e7b421a4"
+  },
+  {
+    "path": "tests/assets/user.acl",
+    "bytes": 113,
+    "fnv64": "820d30f8a3e2e5b3"
+  },
+  {
+    "path": "tests/cluster/cluster.tcl",
+    "bytes": 5252,
+    "fnv64": "fa4cc85af0f0ed39"
+  },
+  {
+    "path": "tests/cluster/run.tcl",
+    "bytes": 739,
+    "fnv64": "a105755e5ba2884e"
+  },
+  {
+    "path": "tests/cluster/tests/00-base.tcl",
+    "bytes": 1583,
+    "fnv64": "599ea66139e50263"
+  },
+  {
+    "path": "tests/cluster/tests/01-faildet.tcl",
+    "bytes": 763,
+    "fnv64": "f08fc7bdeb72429e"
+  },
+  {
+    "path": "tests/cluster/tests/02-failover.tcl",
+    "bytes": 1308,
+    "fnv64": "85f4ab61891833e2"
+  },
+  {
+    "path": "tests/cluster/tests/03-failover-loop.tcl",
+    "bytes": 3299,
+    "fnv64": "03c7c5cca1ad4e17"
+  },
+  {
+    "path": "tests/cluster/tests/04-resharding.tcl",
+    "bytes": 6512,
+    "fnv64": "a9d080e516df6d0c"
+  },
+  {
+    "path": "tests/cluster/tests/05-slave-selection.tcl",
+    "bytes": 4713,
+    "fnv64": "b67bcd8221fa7c9f"
+  },
+  {
+    "path": "tests/cluster/tests/06-slave-stop-cond.tcl",
+    "bytes": 2066,
+    "fnv64": "cf4517c7d8269e90"
+  },
+  {
+    "path": "tests/cluster/tests/07-replica-migration.tcl",
+    "bytes": 2474,
+    "fnv64": "288e78d096786459"
+  },
+  {
+    "path": "tests/cluster/tests/08-update-msg.tcl",
+    "bytes": 1981,
+    "fnv64": "fac98dc26359f3be"
+  },
+  {
+    "path": "tests/cluster/tests/09-pubsub.tcl",
+    "bytes": 1022,
+    "fnv64": "df3089fc8e76bd21"
+  },
+  {
+    "path": "tests/cluster/tests/10-manual-failover.tcl",
+    "bytes": 4350,
+    "fnv64": "a89a04a23d9b375b"
+  },
+  {
+    "path": "tests/cluster/tests/11-manual-takeover.tcl",
+    "bytes": 1272,
+    "fnv64": "acc6288a84a3ef75"
+  },
+  {
+    "path": "tests/cluster/tests/12-replica-migration-2.tcl",
+    "bytes": 2189,
+    "fnv64": "2a12a95c0cc1e1ea"
+  },
+  {
+    "path": "tests/cluster/tests/12.1-replica-migration-3.tcl",
+    "bytes": 2022,
+    "fnv64": "7c07c9aa9d19a34b"
+  },
+  {
+    "path": "tests/cluster/tests/13-no-failover-option.tcl",
+    "bytes": 1325,
+    "fnv64": "96ce9343960e2714"
+  },
+  {
+    "path": "tests/cluster/tests/14-consistency-check.tcl",
+    "bytes": 3868,
+    "fnv64": "d594cb5b9ce4ade0"
+  },
+  {
+    "path": "tests/cluster/tests/15-cluster-slots.tcl",
+    "bytes": 1692,
+    "fnv64": "7b2d2537c5cc7b39"
+  },
+  {
+    "path": "tests/cluster/tests/16-transactions-on-replica.tcl",
+    "bytes": 1800,
+    "fnv64": "4a2fc7ad9a9e104a"
+  },
+  {
+    "path": "tests/cluster/tests/17-diskless-load-swapdb.tcl",
+    "bytes": 2468,
+    "fnv64": "ca5487ba85738a59"
+  },
+  {
+    "path": "tests/cluster/tests/18-info.tcl",
+    "bytes": 1207,
+    "fnv64": "846271bda706799a"
+  },
+  {
+    "path": "tests/cluster/tests/19-cluster-nodes-slots.tcl",
+    "bytes": 2450,
+    "fnv64": "d55458833d1108e9"
+  },
+  {
+    "path": "tests/cluster/tests/20-half-migrated-slot.tcl",
+    "bytes": 3200,
+    "fnv64": "cb7e4314f3c6cc8a"
+  },
+  {
+    "path": "tests/cluster/tests/21-many-slot-migration.tcl",
+    "bytes": 1658,
+    "fnv64": "2f869930b339930c"
+  },
+  {
+    "path": "tests/cluster/tests/helpers/onlydots.tcl",
+    "bytes": 469,
+    "fnv64": "603f9f30dd424264"
+  },
+  {
+    "path": "tests/cluster/tests/includes/init-tests.tcl",
+    "bytes": 2070,
+    "fnv64": "a591a41ba9fc4996"
+  },
+  {
+    "path": "tests/cluster/tests/includes/utils.tcl",
+    "bytes": 949,
+    "fnv64": "1b819b91864ccbde"
+  },
+  {
+    "path": "tests/cluster/tmp/.gitignore",
+    "bytes": 19,
+    "fnv64": "ea358e7387034e93"
+  },
+  {
+    "path": "tests/helpers/bg_block_op.tcl",
+    "bytes": 1546,
+    "fnv64": "0c3fdfa81e43f4d9"
+  },
+  {
+    "path": "tests/helpers/bg_complex_data.tcl",
+    "bytes": 361,
+    "fnv64": "2a111c4605097003"
+  },
+  {
+    "path": "tests/helpers/fake_redis_node.tcl",
+    "bytes": 1627,
+    "fnv64": "7f16908587e250b2"
+  },
+  {
+    "path": "tests/helpers/gen_climbing_load.tcl",
+    "bytes": 434,
+    "fnv64": "3bec8b097f9d34b1"
+  },
+  {
+    "path": "tests/helpers/gen_write_load.tcl",
+    "bytes": 459,
+    "fnv64": "1b4d7c9521a24577"
+  },
+  {
+    "path": "tests/instances.tcl",
+    "bytes": 22491,
+    "fnv64": "d0b71495fbdfe9e1"
+  },
+  {
+    "path": "tests/integration/aof-race.tcl",
+    "bytes": 1327,
+    "fnv64": "ae0217b7ba0348c9"
+  },
+  {
+    "path": "tests/integration/aof.tcl",
+    "bytes": 11692,
+    "fnv64": "b52288c36b36f7ca"
+  },
+  {
+    "path": "tests/integration/block-repl.tcl",
+    "bytes": 1892,
+    "fnv64": "6a5315ca6b2c0ffe"
+  },
+  {
+    "path": "tests/integration/convert-zipmap-hash-on-load.tcl",
+    "bytes": 1305,
+    "fnv64": "e0005aa50ccafc57"
+  },
+  {
+    "path": "tests/integration/corrupt-dump-fuzzer.tcl",
+    "bytes": 8683,
+    "fnv64": "63743ad3fa90f2b2"
+  },
+  {
+    "path": "tests/integration/corrupt-dump.tcl",
+    "bytes": 49702,
+    "fnv64": "048bc66b1f53996c"
+  },
+  {
+    "path": "tests/integration/failover.tcl",
+    "bytes": 10068,
+    "fnv64": "bc97348b25b310ac"
+  },
+  {
+    "path": "tests/integration/keydb-benchmark.tcl",
+    "bytes": 8029,
+    "fnv64": "fefc042165507449"
+  },
+  {
+    "path": "tests/integration/keydb-cli.tcl",
+    "bytes": 11468,
+    "fnv64": "d6117298d2901ac2"
+  },
+  {
+    "path": "tests/integration/logging.tcl",
+    "bytes": 1690,
+    "fnv64": "f37291746559f3ff"
+  },
+  {
+    "path": "tests/integration/multimaster-psync.tcl",
+    "bytes": 1495,
+    "fnv64": "c448bec385f33084"
+  },
+  {
+    "path": "tests/integration/psync2-pingoff.tcl",
+    "bytes": 9351,
+    "fnv64": "fd94472b70de35f3"
+  },
+  {
+    "path": "tests/integration/psync2-reg-multimaster.tcl",
+    "bytes": 4137,
+    "fnv64": "e71a10ab4ed916da"
+  },
+  {
+    "path": "tests/integration/psync2-reg.tcl",
+    "bytes": 2816,
+    "fnv64": "f43bd31e7d22b528"
+  },
+  {
+    "path": "tests/integration/psync2.tcl",
+    "bytes": 14917,
+    "fnv64": "f483b3fc0089abcd"
+  },
+  {
+    "path": "tests/integration/rdb-repl-tests",
+    "bytes": 188,
+    "fnv64": "59261a3bebd3f7e8"
+  },
+  {
+    "path": "tests/integration/rdb.tcl",
+    "bytes": 11432,
+    "fnv64": "d8545e3f6b206d57"
+  },
+  {
+    "path": "tests/integration/replication-2.tcl",
+    "bytes": 4204,
+    "fnv64": "6e3887aa8ce5e06d"
+  },
+  {
+    "path": "tests/integration/replication-3.tcl",
+    "bytes": 5037,
+    "fnv64": "a8510c5dd085d9c2"
+  },
+  {
+    "path": "tests/integration/replication-4.tcl",
+    "bytes": 7935,
+    "fnv64": "7d9a455de859ce7b"
+  },
+  {
+    "path": "tests/integration/replication-active.tcl",
+    "bytes": 12501,
+    "fnv64": "edfe7ef1c090a2f7"
+  },
+  {
+    "path": "tests/integration/replication-fast.tcl",
+    "bytes": 1257,
+    "fnv64": "e745ccd0a52ff308"
+  },
+  {
+    "path": "tests/integration/replication-multimaster-connect.tcl",
+    "bytes": 4174,
+    "fnv64": "6a3479a4b1d8b2a8"
+  },
+  {
+    "path": "tests/integration/replication-multimaster.tcl",
+    "bytes": 3702,
+    "fnv64": "a6b286b05d9dac31"
+  },
+  {
+    "path": "tests/integration/replication-psync-flash.tcl",
+    "bytes": 5903,
+    "fnv64": "693636e105e9c59c"
+  },
+  {
+    "path": "tests/integration/replication-psync-multimaster.tcl",
+    "bytes": 6275,
+    "fnv64": "263ee24a3de951ce"
+  },
+  {
+    "path": "tests/integration/replication-psync.tcl",
+    "bytes": 5683,
+    "fnv64": "19cb5faf3e44ebbb"
+  },
+  {
+    "path": "tests/integration/replication.tcl",
+    "bytes": 39943,
+    "fnv64": "436fa364802578d3"
+  },
+  {
+    "path": "tests/modules/Makefile",
+    "bytes": 1290,
+    "fnv64": "3529a4bbcf457118"
+  },
+  {
+    "path": "tests/modules/auth.c",
+    "bytes": 3066,
+    "fnv64": "2a27f50b28a7b683"
+  },
+  {
+    "path": "tests/modules/basics.c",
+    "bytes": 21273,
+    "fnv64": "59248870e41937cf"
+  },
+  {
+    "path": "tests/modules/blockedclient.c",
+    "bytes": 6185,
+    "fnv64": "7e35af1b9ece01c4"
+  },
+  {
+    "path": "tests/modules/blockonbackground.c",
+    "bytes": 11303,
+    "fnv64": "9a2974c2b296b77a"
+  },
+  {
+    "path": "tests/modules/blockonkeys.c",
+    "bytes": 18426,
+    "fnv64": "876db8b22de299f6"
+  },
+  {
+    "path": "tests/modules/commandfilter.c",
+    "bytes": 5370,
+    "fnv64": "213f3a0a750672ea"
+  },
+  {
+    "path": "tests/modules/datatype.c",
+    "bytes": 6966,
+    "fnv64": "8b5b2d8747d2cabf"
+  },
+  {
+    "path": "tests/modules/defragtest.c",
+    "bytes": 7169,
+    "fnv64": "a9b59202f2d41a07"
+  },
+  {
+    "path": "tests/modules/fork.c",
+    "bytes": 2708,
+    "fnv64": "c0e02734fb97c4f7"
+  },
+  {
+    "path": "tests/modules/getkeys.c",
+    "bytes": 3544,
+    "fnv64": "5d11f10c2a221ecc"
+  },
+  {
+    "path": "tests/modules/hash.c",
+    "bytes": 3481,
+    "fnv64": "de92811493895f1f"
+  },
+  {
+    "path": "tests/modules/hooks.c",
+    "bytes": 12815,
+    "fnv64": "e2ea8511bb4babe4"
+  },
+  {
+    "path": "tests/modules/infotest.c",
+    "bytes": 4587,
+    "fnv64": "5a8ef368c8152646"
+  },
+  {
+    "path": "tests/modules/keyspace_events.c",
+    "bytes": 10768,
+    "fnv64": "b32a6e536adbe06f"
+  },
+  {
+    "path": "tests/modules/load.c",
+    "bytes": 3838,
+    "fnv64": "0cc4b351e2649a91"
+  },
+  {
+    "path": "tests/modules/misc.c",
+    "bytes": 11498,
+    "fnv64": "6b6e0d1ec66e7541"
+  },
+  {
+    "path": "tests/modules/propagate.c",
+    "bytes": 9215,
+    "fnv64": "97dbd2249cb6558e"
+  },
+  {
+    "path": "tests/modules/scan.c",
+    "bytes": 3803,
+    "fnv64": "da7d3cb1f4264be3"
+  },
+  {
+    "path": "tests/modules/stream.c",
+    "bytes": 9522,
+    "fnv64": "1424d29dd081387f"
+  },
+  {
+    "path": "tests/modules/test_lazyfree.c",
+    "bytes": 6188,
+    "fnv64": "f57e4c35d3dbf139"
+  },
+  {
+    "path": "tests/modules/testrdb.c",
+    "bytes": 9704,
+    "fnv64": "4f27e6e9f63400c1"
+  },
+  {
+    "path": "tests/modules/timer.c",
+    "bytes": 3093,
+    "fnv64": "e60194d87b209d72"
+  },
+  {
+    "path": "tests/modules/timers.c",
+    "bytes": 2485,
+    "fnv64": "087c711b8c47a6c5"
+  },
+  {
+    "path": "tests/modules/zset.c",
+    "bytes": 1127,
+    "fnv64": "7dec22ba4ccd0fd8"
+  },
+  {
+    "path": "tests/sentinel/run.tcl",
+    "bytes": 759,
+    "fnv64": "f179b57906b3896f"
+  },
+  {
+    "path": "tests/sentinel/tests/00-base.tcl",
+    "bytes": 3957,
+    "fnv64": "2bed916a3b7d40e7"
+  },
+  {
+    "path": "tests/sentinel/tests/01-conf-update.tcl",
+    "bytes": 1250,
+    "fnv64": "4272160f12f01cf4"
+  },
+  {
+    "path": "tests/sentinel/tests/02-slaves-reconf.tcl",
+    "bytes": 2669,
+    "fnv64": "82430e9a646f0494"
+  },
+  {
+    "path": "tests/sentinel/tests/03-runtime-reconf.tcl",
+    "bytes": 53,
+    "fnv64": "3c0c520ef7f8d585"
+  },
+  {
+    "path": "tests/sentinel/tests/04-slave-selection.tcl",
+    "bytes": 207,
+    "fnv64": "3fe934211e95b9d0"
+  },
+  {
+    "path": "tests/sentinel/tests/05-manual.tcl",
+    "bytes": 1394,
+    "fnv64": "79487c59b05c12f4"
+  },
+  {
+    "path": "tests/sentinel/tests/06-ckquorum.tcl",
+    "bytes": 1134,
+    "fnv64": "322255fd5b28f7d9"
+  },
+  {
+    "path": "tests/sentinel/tests/07-down-conditions.tcl",
+    "bytes": 2546,
+    "fnv64": "124f00b4e760540f"
+  },
+  {
+    "path": "tests/sentinel/tests/08-hostname-conf.tcl",
+    "bytes": 1981,
+    "fnv64": "1b27d7d9b7f6ea06"
+  },
+  {
+    "path": "tests/sentinel/tests/09-acl-support.tcl",
+    "bytes": 1338,
+    "fnv64": "d094ef954fd36da5"
+  },
+  {
+    "path": "tests/sentinel/tests/10-replica-priority.tcl",
+    "bytes": 2791,
+    "fnv64": "be25d5f260794a9b"
+  },
+  {
+    "path": "tests/sentinel/tests/helpers/check_leaked_fds.tcl",
+    "bytes": 2202,
+    "fnv64": "d2f2ff53b37bf3ad"
+  },
+  {
+    "path": "tests/sentinel/tests/includes/init-tests.tcl",
+    "bytes": 2693,
+    "fnv64": "eccd81209faad69b"
+  },
+  {
+    "path": "tests/sentinel/tests/includes/sentinel.conf",
+    "bytes": 333,
+    "fnv64": "21abae3d80d9c36b"
+  },
+  {
+    "path": "tests/sentinel/tests/includes/start-init-tests.tcl",
+    "bytes": 621,
+    "fnv64": "79f34e33bf2ee0f8"
+  },
+  {
+    "path": "tests/sentinel/tmp/.gitignore",
+    "bytes": 19,
+    "fnv64": "ea358e7387034e93"
+  },
+  {
+    "path": "tests/support/benchmark.tcl",
+    "bytes": 541,
+    "fnv64": "93eb276c79afb1e6"
+  },
+  {
+    "path": "tests/support/cli.tcl",
+    "bytes": 527,
+    "fnv64": "9ab2ee243d7076dc"
+  },
+  {
+    "path": "tests/support/cluster.tcl",
+    "bytes": 13466,
+    "fnv64": "758d04dc39442c22"
+  },
+  {
+    "path": "tests/support/keydb.tcl",
+    "bytes": 12075,
+    "fnv64": "aa5d1409c65fccc4"
+  },
+  {
+    "path": "tests/support/server.tcl",
+    "bytes": 20759,
+    "fnv64": "5a455d52182e3d16"
+  },
+  {
+    "path": "tests/support/test.tcl",
+    "bytes": 6589,
+    "fnv64": "43af2bd0716eeda3"
+  },
+  {
+    "path": "tests/support/tmpfile.tcl",
+    "bytes": 403,
+    "fnv64": "599f735f7a0e0c39"
+  },
+  {
+    "path": "tests/support/util.tcl",
+    "bytes": 23908,
+    "fnv64": "13e9acf24de0fd0a"
+  },
+  {
+    "path": "tests/test_helper.tcl",
+    "bytes": 28674,
+    "fnv64": "a9fa130dc32d2d96"
+  },
+  {
+    "path": "tests/tmp/.gitignore",
+    "bytes": 2,
+    "fnv64": "9b9e73d32804f667"
+  },
+  {
+    "path": "tests/unit/acl.tcl",
+    "bytes": 21683,
+    "fnv64": "df4e5e305d33b844"
+  },
+  {
+    "path": "tests/unit/aofrw.tcl",
+    "bytes": 7089,
+    "fnv64": "02b81e9c8a7ae777"
+  },
+  {
+    "path": "tests/unit/auth.tcl",
+    "bytes": 2643,
+    "fnv64": "753ee1e3a1cc07fc"
+  },
+  {
+    "path": "tests/unit/bitfield.tcl",
+    "bytes": 8191,
+    "fnv64": "9940b0dff5e2fd88"
+  },
+  {
+    "path": "tests/unit/bitops.tcl",
+    "bytes": 13323,
+    "fnv64": "e9a6c96a246c4d06"
+  },
+  {
+    "path": "tests/unit/cron.tcl",
+    "bytes": 1550,
+    "fnv64": "175ac766905b2fb0"
+  },
+  {
+    "path": "tests/unit/dump.tcl",
+    "bytes": 13265,
+    "fnv64": "bfafe36f3c865165"
+  },
+  {
+    "path": "tests/unit/expire.tcl",
+    "bytes": 15686,
+    "fnv64": "76fe147a952f1fef"
+  },
+  {
+    "path": "tests/unit/flash.tcl",
+    "bytes": 12446,
+    "fnv64": "5634ba7fef272cc6"
+  },
+  {
+    "path": "tests/unit/flash.tcl.save",
+    "bytes": 1473,
+    "fnv64": "f7a6b5332e5b3561"
+  },
+  {
+    "path": "tests/unit/geo.tcl",
+    "bytes": 29266,
+    "fnv64": "cc9ff60275553e22"
+  },
+  {
+    "path": "tests/unit/hyperloglog.tcl",
+    "bytes": 6476,
+    "fnv64": "d60061ab9a15f61f"
+  },
+  {
+    "path": "tests/unit/info.tcl",
+    "bytes": 7199,
+    "fnv64": "44f78d9e20d17003"
+  },
+  {
+    "path": "tests/unit/introspection-2.tcl",
+    "bytes": 2169,
+    "fnv64": "58401546e02ea74f"
+  },
+  {
+    "path": "tests/unit/introspection.tcl",
+    "bytes": 8496,
+    "fnv64": "5afc61528b20d766"
+  },
+  {
+    "path": "tests/unit/keyspace.tcl",
+    "bytes": 14027,
+    "fnv64": "bac09a5e3e36553d"
+  },
+  {
+    "path": "tests/unit/latency-monitor.tcl",
+    "bytes": 2397,
+    "fnv64": "df9889743bd697e4"
+  },
+  {
+    "path": "tests/unit/lazyfree.tcl",
+    "bytes": 1270,
+    "fnv64": "4c48eb7f072d00c5"
+  },
+  {
+    "path": "tests/unit/limits.tcl",
+    "bytes": 558,
+    "fnv64": "6baa6940333ae383"
+  },
+  {
+    "path": "tests/unit/loadsave.tcl",
+    "bytes": 2010,
+    "fnv64": "63d96b5524698110"
+  },
+  {
+    "path": "tests/unit/maxmemory.tcl",
+    "bytes": 13874,
+    "fnv64": "239ee60e6a4c02e1"
+  },
+  {
+    "path": "tests/unit/memefficiency.tcl",
+    "bytes": 25248,
+    "fnv64": "18754664e5ee3bf9"
+  },
+  {
+    "path": "tests/unit/moduleapi/auth.tcl",
+    "bytes": 2272,
+    "fnv64": "5e1444ec6c96b807"
+  },
+  {
+    "path": "tests/unit/moduleapi/basics.tcl",
+    "bytes": 234,
+    "fnv64": "2f3125e951a0107c"
+  },
+  {
+    "path": "tests/unit/moduleapi/blockedclient.tcl",
+    "bytes": 2994,
+    "fnv64": "e4509228116b1d29"
+  },
+  {
+    "path": "tests/unit/moduleapi/blockonbackground.tcl",
+    "bytes": 4005,
+    "fnv64": "713a77c7bcb42663"
+  },
+  {
+    "path": "tests/unit/moduleapi/blockonkeys.tcl",
+    "bytes": 7365,
+    "fnv64": "507c56fec2f07e60"
+  },
+  {
+    "path": "tests/unit/moduleapi/commandfilter.tcl",
+    "bytes": 2502,
+    "fnv64": "52e0cf6783bdcc69"
+  },
+  {
+    "path": "tests/unit/moduleapi/datatype.tcl",
+    "bytes": 1967,
+    "fnv64": "b3fd7f40770f8a8f"
+  },
+  {
+    "path": "tests/unit/moduleapi/defrag.tcl",
+    "bytes": 1612,
+    "fnv64": "99370e281103e56e"
+  },
+  {
+    "path": "tests/unit/moduleapi/fork.tcl",
+    "bytes": 811,
+    "fnv64": "43682e495f55ce9e"
+  },
+  {
+    "path": "tests/unit/moduleapi/getkeys.tcl",
+    "bytes": 1497,
+    "fnv64": "70745bc031ec6838"
+  },
+  {
+    "path": "tests/unit/moduleapi/hash.tcl",
+    "bytes": 1067,
+    "fnv64": "9e8a1bf862ffd986"
+  },
+  {
+    "path": "tests/unit/moduleapi/hooks.tcl",
+    "bytes": 6574,
+    "fnv64": "ea4ef77363b13714"
+  },
+  {
+    "path": "tests/unit/moduleapi/infotest.tcl",
+    "bytes": 3383,
+    "fnv64": "82bfe499bb95e7da"
+  },
+  {
+    "path": "tests/unit/moduleapi/keyspace_events.tcl",
+    "bytes": 2715,
+    "fnv64": "bfe0a1a020e20a24"
+  },
+  {
+    "path": "tests/unit/moduleapi/load.tcl",
+    "bytes": 531,
+    "fnv64": "dcb4bcd21001d4d8"
+  },
+  {
+    "path": "tests/unit/moduleapi/misc.tcl",
+    "bytes": 3575,
+    "fnv64": "a4871c3e102961b0"
+  },
+  {
+    "path": "tests/unit/moduleapi/moduleloadsave.tcl",
+    "bytes": 1715,
+    "fnv64": "7c0453d0bfb05b06"
+  },
+  {
+    "path": "tests/unit/moduleapi/propagate.tcl",
+    "bytes": 10045,
+    "fnv64": "06be2d8a4e06d18a"
+  },
+  {
+    "path": "tests/unit/moduleapi/scan.tcl",
+    "bytes": 1389,
+    "fnv64": "d32773390af3bb27"
+  },
+  {
+    "path": "tests/unit/moduleapi/stream.tcl",
+    "bytes": 6567,
+    "fnv64": "9813e34d51443d3e"
+  },
+  {
+    "path": "tests/unit/moduleapi/test_lazyfree.tcl",
+    "bytes": 962,
+    "fnv64": "6417720d850cd33a"
+  },
+  {
+    "path": "tests/unit/moduleapi/testrdb.tcl",
+    "bytes": 6250,
+    "fnv64": "d01fe2fa5567ad58"
+  },
+  {
+    "path": "tests/unit/moduleapi/timer.tcl",
+    "bytes": 1556,
+    "fnv64": "53c841d5539f0e16"
+  },
+  {
+    "path": "tests/unit/moduleapi/zset.tcl",
+    "bytes": 477,
+    "fnv64": "268db79af21ba950"
+  },
+  {
+    "path": "tests/unit/multi.tcl",
+    "bytes": 17197,
+    "fnv64": "b3615d0cb37e33a1"
+  },
+  {
+    "path": "tests/unit/networking.tcl",
+    "bytes": 1120,
+    "fnv64": "5ff014baee206cba"
+  },
+  {
+    "path": "tests/unit/obuf-limits.tcl",
+    "bytes": 7440,
+    "fnv64": "8e2915ab22ae1224"
+  },
+  {
+    "path": "tests/unit/oom-score-adj.tcl",
+    "bytes": 2762,
+    "fnv64": "22283046a0e318a6"
+  },
+  {
+    "path": "tests/unit/other.tcl",
+    "bytes": 11154,
+    "fnv64": "1c0ebe136e152ed0"
+  },
+  {
+    "path": "tests/unit/pause.tcl",
+    "bytes": 7268,
+    "fnv64": "5fba372bc7e39bb7"
+  },
+  {
+    "path": "tests/unit/pendingquerybuf.tcl",
+    "bytes": 1011,
+    "fnv64": "ac9d94203b881fbf"
+  },
+  {
+    "path": "tests/unit/printver.tcl",
+    "bytes": 187,
+    "fnv64": "752a6c8f8638343b"
+  },
+  {
+    "path": "tests/unit/protocol.tcl",
+    "bytes": 5632,
+    "fnv64": "755f0b0be5381fb5"
+  },
+  {
+    "path": "tests/unit/pubsub.tcl",
+    "bytes": 12661,
+    "fnv64": "c120bc00aee5f5ce"
+  },
+  {
+    "path": "tests/unit/quit.tcl",
+    "bytes": 986,
+    "fnv64": "cd8ec93dcb7ed171"
+  },
+  {
+    "path": "tests/unit/replication.tcl",
+    "bytes": 323,
+    "fnv64": "b9e24232966c03e2"
+  },
+  {
+    "path": "tests/unit/rreplay.tcl",
+    "bytes": 899,
+    "fnv64": "4cd5f31645f55b1c"
+  },
+  {
+    "path": "tests/unit/scan.tcl",
+    "bytes": 9333,
+    "fnv64": "96bd40f0aa326de3"
+  },
+  {
+    "path": "tests/unit/scripting.tcl",
+    "bytes": 34444,
+    "fnv64": "651d65f104685f09"
+  },
+  {
+    "path": "tests/unit/shutdown.tcl",
+    "bytes": 1858,
+    "fnv64": "ee0c02339391e738"
+  },
+  {
+    "path": "tests/unit/slowlog.tcl",
+    "bytes": 6532,
+    "fnv64": "b4caffa4214d19e5"
+  },
+  {
+    "path": "tests/unit/soft_shutdown.tcl",
+    "bytes": 4044,
+    "fnv64": "61d0ecc43291adb5"
+  },
+  {
+    "path": "tests/unit/sort.tcl",
+    "bytes": 10667,
+    "fnv64": "d175b005edfb4bed"
+  },
+  {
+    "path": "tests/unit/tls-auditlog.tcl",
+    "bytes": 5661,
+    "fnv64": "f127d5513aba6859"
+  },
+  {
+    "path": "tests/unit/tls-name-validation.tcl",
+    "bytes": 4004,
+    "fnv64": "850d16f1f68a8c0d"
+  },
+  {
+    "path": "tests/unit/tls-rotation.tcl",
+    "bytes": 4568,
+    "fnv64": "5666b2991b4b092a"
+  },
+  {
+    "path": "tests/unit/tls.tcl",
+    "bytes": 5491,
+    "fnv64": "4b2fb8ff8f915971"
+  },
+  {
+    "path": "tests/unit/tracking.tcl",
+    "bytes": 21717,
+    "fnv64": "61cfa715e6996aab"
+  },
+  {
+    "path": "tests/unit/type/hash.tcl",
+    "bytes": 30154,
+    "fnv64": "4d8bd7209ba8f2e5"
+  },
+  {
+    "path": "tests/unit/type/incr.tcl",
+    "bytes": 4617,
+    "fnv64": "28d4843ea03d0e0a"
+  },
+  {
+    "path": "tests/unit/type/list-2.tcl",
+    "bytes": 1663,
+    "fnv64": "0d6e503e23d09118"
+  },
+  {
+    "path": "tests/unit/type/list-3.tcl",
+    "bytes": 4522,
+    "fnv64": "fd84b7cc679a6932"
+  },
+  {
+    "path": "tests/unit/type/list-common.tcl",
+    "bytes": 238,
+    "fnv64": "fbb7764ce5a169c0"
+  },
+  {
+    "path": "tests/unit/type/list.tcl",
+    "bytes": 39381,
+    "fnv64": "a72187437b1dd189"
+  },
+  {
+    "path": "tests/unit/type/nestedhash.tcl",
+    "bytes": 1482,
+    "fnv64": "fa94a4bad6b81b5d"
+  },
+  {
+    "path": "tests/unit/type/set.tcl",
+    "bytes": 30670,
+    "fnv64": "15f00c85efb8f9e3"
+  },
+  {
+    "path": "tests/unit/type/stream-cgroups.tcl",
+    "bytes": 26552,
+    "fnv64": "c333f1520d7111b4"
+  },
+  {
+    "path": "tests/unit/type/stream.tcl",
+    "bytes": 24164,
+    "fnv64": "e5bebecbfbc5d3a5"
+  },
+  {
+    "path": "tests/unit/type/string.tcl",
+    "bytes": 18109,
+    "fnv64": "0bdaac9ad95b1597"
+  },
+  {
+    "path": "tests/unit/type/zset.tcl",
+    "bytes": 69090,
+    "fnv64": "a3231d3256fb7bd4"
+  },
+  {
+    "path": "tests/unit/violations.tcl",
+    "bytes": 5328,
+    "fnv64": "17b231373070ad34"
+  },
+  {
+    "path": "tests/unit/wait.tcl",
+    "bytes": 1689,
+    "fnv64": "2e45de8800984e7d"
+  }
+]

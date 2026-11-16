@@ -1,0 +1,1255 @@
+[
+  {
+    "name": "rdbchecksum",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "daemonize",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "lua-replicate-commands",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "always-show-logo",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "enable-motd",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "protected-mode",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "rdbcompression",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "rdb-del-sync-files",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "activerehashing",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "stop-writes-on-bgsave-error",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "set-proc-title",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "dynamic-hz",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "lazyfree-lazy-eviction",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "lazyfree-lazy-expire",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "lazyfree-lazy-server-del",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "lazyfree-lazy-user-del",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "lazyfree-lazy-user-flush",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "repl-disable-tcp-nodelay",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "repl-diskless-sync",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "aof-rewrite-incremental-fsync",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "no-appendfsync-on-rewrite",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "cluster-require-full-coverage",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "rdb-save-incremental-fsync",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "aof-load-truncated",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "aof-use-rdb-preamble",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "cluster-replica-no-failover",
+    "kind": "Bool",
+    "alias": "cluster-slave-no-failover",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "replica-lazy-flush",
+    "kind": "Bool",
+    "alias": "slave-lazy-flush",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "replica-serve-stale-data",
+    "kind": "Bool",
+    "alias": "slave-serve-stale-data",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "replica-read-only",
+    "kind": "Bool",
+    "alias": "slave-read-only",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "replica-ignore-maxmemory",
+    "kind": "Bool",
+    "alias": "slave-ignore-maxmemory",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "jemalloc-bg-thread",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "activedefrag",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "syslog-enabled",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "cluster-enabled",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "appendonly",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "cluster-allow-reads-when-down",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "delete-on-evict",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "use-fork",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "io-threads-do-reads",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "time-thread-priority",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "prefetch-enabled",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "allow-rdb-resize-op",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "crash-log-enabled",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "crash-memcheck-enabled",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "use-exit-on-panic",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "disable-thp",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "cluster-allow-replica-migration",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "replica-announced",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "enable-async-commands",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "multithread-load-enabled",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "active-client-balancing",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "aclfile",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "g_pserver->acl_filename"
+  },
+  {
+    "name": "unixsocket",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "g_pserver->unixsocket"
+  },
+  {
+    "name": "pidfile",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "cserver.pidfile"
+  },
+  {
+    "name": "replica-announce-ip",
+    "kind": "String",
+    "alias": "slave-announce-ip",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->slave_announce_ip"
+  },
+  {
+    "name": "masteruser",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG | SENSITIVE_CONFIG",
+    "default": "cserver.default_masteruser"
+  },
+  {
+    "name": "cluster-announce-ip",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->cluster_announce_ip"
+  },
+  {
+    "name": "syslog-ident",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "g_pserver->syslog_ident"
+  },
+  {
+    "name": "dbfilename",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->rdb_filename"
+  },
+  {
+    "name": "db-s3-object",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->rdb_s3bucketpath"
+  },
+  {
+    "name": "appendfilename",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "g_pserver->aof_filename"
+  },
+  {
+    "name": "server_cpulist",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "g_pserver->server_cpulist"
+  },
+  {
+    "name": "bio_cpulist",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "g_pserver->bio_cpulist"
+  },
+  {
+    "name": "aof_rewrite_cpulist",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "g_pserver->aof_rewrite_cpulist"
+  },
+  {
+    "name": "bgsave_cpulist",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "g_pserver->bgsave_cpulist"
+  },
+  {
+    "name": "storage-provider-options",
+    "kind": "String",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "cserver.storage_conf"
+  },
+  {
+    "name": "ignore-warnings",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->ignore_warnings"
+  },
+  {
+    "name": "proc-title-template",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "cserver.proc_title_template"
+  },
+  {
+    "name": "masterauth",
+    "kind": "SDS",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG | SENSITIVE_CONFIG",
+    "default": "cserver.default_masterauth"
+  },
+  {
+    "name": "requirepass",
+    "kind": "SDS",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG | SENSITIVE_CONFIG",
+    "default": "g_pserver->requirepass"
+  },
+  {
+    "name": "supervised",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "cserver.supervised_mode"
+  },
+  {
+    "name": "syslog-facility",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "g_pserver->syslog_facility"
+  },
+  {
+    "name": "repl-diskless-load",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->repl_diskless_load"
+  },
+  {
+    "name": "loglevel",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "cserver.verbosity"
+  },
+  {
+    "name": "maxmemory-policy",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->maxmemory_policy"
+  },
+  {
+    "name": "appendfsync",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->aof_fsync"
+  },
+  {
+    "name": "storage-cache-mode",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "cserver.storage_memory_model"
+  },
+  {
+    "name": "oom-score-adj",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->oom_score_adj"
+  },
+  {
+    "name": "acl-pubsub-default",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->acl_pubsub_default"
+  },
+  {
+    "name": "sanitize-dump-payload",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "cserver.sanitize_dump_payload"
+  },
+  {
+    "name": "databases",
+    "kind": "Int",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "port",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "65535"
+  },
+  {
+    "name": "auto-aof-rewrite-percentage",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "cluster-replica-validity-factor",
+    "kind": "Int",
+    "alias": "cluster-slave-validity-factor",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "list-max-ziplist-size",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "tcp-keepalive",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "cluster-migration-barrier",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "active-defrag-cycle-min",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "99"
+  },
+  {
+    "name": "active-defrag-cycle-max",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "99"
+  },
+  {
+    "name": "active-defrag-threshold-lower",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1000"
+  },
+  {
+    "name": "active-defrag-threshold-upper",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1000"
+  },
+  {
+    "name": "lfu-log-factor",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "lfu-decay-time",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "replica-priority",
+    "kind": "Int",
+    "alias": "slave-priority",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "repl-diskless-sync-delay",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "maxmemory-samples",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "maxmemory-eviction-tenacity",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "100"
+  },
+  {
+    "name": "timeout",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "replica-announce-port",
+    "kind": "Int",
+    "alias": "slave-announce-port",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "65535"
+  },
+  {
+    "name": "tcp-backlog",
+    "kind": "Int",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "cluster-announce-bus-port",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "65535"
+  },
+  {
+    "name": "cluster-announce-port",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "65535"
+  },
+  {
+    "name": "cluster-announce-tls-port",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "65535"
+  },
+  {
+    "name": "repl-timeout",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "repl-ping-replica-period",
+    "kind": "Int",
+    "alias": "repl-ping-slave-period",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "list-compress-depth",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "rdb-key-save-delay",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "key-load-delay",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "active-expire-effort",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "10"
+  },
+  {
+    "name": "hz",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "min-replicas-to-write",
+    "kind": "Int",
+    "alias": "min-slaves-to-write",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "min-replicas-max-lag",
+    "kind": "Int",
+    "alias": "min-slaves-max-lag",
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "min-clients-per-thread",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "400"
+  },
+  {
+    "name": "storage-flush-period",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "10000"
+  },
+  {
+    "name": "replica-quorum",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "replica-weighting-factor",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "maxclients",
+    "kind": "UInt",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "UINT_MAX"
+  },
+  {
+    "name": "loading-process-events-interval-keys",
+    "kind": "UInt",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "maxclients-reserved",
+    "kind": "UInt",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "100"
+  },
+  {
+    "name": "active-defrag-max-scan-fields",
+    "kind": "ULong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "slowlog-max-len",
+    "kind": "ULong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "acllog-max-len",
+    "kind": "ULong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "lua-time-limit",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "cluster-node-timeout",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "slowlog-log-slower-than",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "latency-monitor-threshold",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "proto-max-bulk-len",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "stream-node-max-entries",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "repl-backlog-size",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "repl-backlog-disk-reserve",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "IMMUTABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "max-snapshot-slip",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "5000"
+  },
+  {
+    "name": "max-rand-count",
+    "kind": "LongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX/2"
+  },
+  {
+    "name": "maxmemory",
+    "kind": "ULongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "maxstorage",
+    "kind": "ULongLong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "hash-max-ziplist-entries",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "set-max-intset-entries",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "zset-max-ziplist-entries",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "active-defrag-ignore-bytes",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "hash-max-ziplist-value",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "stream-node-max-bytes",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "zset-max-ziplist-value",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "hll-sparse-max-bytes",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "tracking-table-max-keys",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "client-query-buffer-limit",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "repl-backlog-ttl",
+    "kind": "TimeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "auto-aof-rewrite-min-size",
+    "kind": "OffT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LLONG_MAX"
+  },
+  {
+    "name": "loading-process-events-interval-bytes",
+    "kind": "ULong",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "LONG_MAX"
+  },
+  {
+    "name": "multi-master-no-forward",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "allow-write-during-load",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "force-backlog-disk-reserve",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "soft-shutdown",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "flash-disable-key-cache",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "semi-ordered-set-bucket-size",
+    "kind": "SizeT",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1024"
+  },
+  {
+    "name": "availability-zone",
+    "kind": "SDS",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->sdsAvailabilityZone"
+  },
+  {
+    "name": "overload-protect-percent",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "200"
+  },
+  {
+    "name": "force-eviction-percent",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "100"
+  },
+  {
+    "name": "enable-async-rehash",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "enable-keydb-fastsync",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "tls-port",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "65535"
+  },
+  {
+    "name": "tls-session-cache-size",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "tls-session-cache-timeout",
+    "kind": "Int",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "INT_MAX"
+  },
+  {
+    "name": "tls-cluster",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "tls-replication",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "tls-auth-clients",
+    "kind": "Enum",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_auth_clients"
+  },
+  {
+    "name": "tls-prefer-server-ciphers",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "tls-session-caching",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "1"
+  },
+  {
+    "name": "tls-rotation",
+    "kind": "Bool",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "0"
+  },
+  {
+    "name": "tls-cert-file",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.cert_file"
+  },
+  {
+    "name": "tls-key-file",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.key_file"
+  },
+  {
+    "name": "tls-key-file-pass",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.key_file_pass"
+  },
+  {
+    "name": "tls-client-cert-file",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.client_cert_file"
+  },
+  {
+    "name": "tls-client-key-file",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.client_key_file"
+  },
+  {
+    "name": "tls-client-key-file-pass",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.client_key_file_pass"
+  },
+  {
+    "name": "tls-dh-params-file",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.dh_params_file"
+  },
+  {
+    "name": "tls-ca-cert-file",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.ca_cert_file"
+  },
+  {
+    "name": "tls-ca-cert-dir",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.ca_cert_dir"
+  },
+  {
+    "name": "tls-protocols",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.protocols"
+  },
+  {
+    "name": "tls-ciphers",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.ciphers"
+  },
+  {
+    "name": "tls-ciphersuites",
+    "kind": "String",
+    "alias": null,
+    "flags": "MODIFIABLE_CONFIG",
+    "default": "g_pserver->tls_ctx_config.ciphersuites"
+  }
+]

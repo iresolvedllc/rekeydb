@@ -1,0 +1,678 @@
+{
+  "files": [
+    {
+      "path": "cluster/cluster.tcl",
+      "lines": 177
+    },
+    {
+      "path": "cluster/run.tcl",
+      "lines": 32
+    },
+    {
+      "path": "cluster/tests/00-base.tcl",
+      "lines": 59
+    },
+    {
+      "path": "cluster/tests/01-faildet.tcl",
+      "lines": 38
+    },
+    {
+      "path": "cluster/tests/02-failover.tcl",
+      "lines": 65
+    },
+    {
+      "path": "cluster/tests/03-failover-loop.tcl",
+      "lines": 115
+    },
+    {
+      "path": "cluster/tests/04-resharding.tcl",
+      "lines": 194
+    },
+    {
+      "path": "cluster/tests/05-slave-selection.tcl",
+      "lines": 171
+    },
+    {
+      "path": "cluster/tests/06-slave-stop-cond.tcl",
+      "lines": 73
+    },
+    {
+      "path": "cluster/tests/07-replica-migration.tcl",
+      "lines": 103
+    },
+    {
+      "path": "cluster/tests/08-update-msg.tcl",
+      "lines": 90
+    },
+    {
+      "path": "cluster/tests/09-pubsub.tcl",
+      "lines": 40
+    },
+    {
+      "path": "cluster/tests/10-manual-failover.tcl",
+      "lines": 192
+    },
+    {
+      "path": "cluster/tests/11-manual-takeover.tcl",
+      "lines": 59
+    },
+    {
+      "path": "cluster/tests/12-replica-migration-2.tcl",
+      "lines": 74
+    },
+    {
+      "path": "cluster/tests/12.1-replica-migration-3.tcl",
+      "lines": 71
+    },
+    {
+      "path": "cluster/tests/13-no-failover-option.tcl",
+      "lines": 61
+    },
+    {
+      "path": "cluster/tests/14-consistency-check.tcl",
+      "lines": 117
+    },
+    {
+      "path": "cluster/tests/15-cluster-slots.tcl",
+      "lines": 63
+    },
+    {
+      "path": "cluster/tests/16-transactions-on-replica.tcl",
+      "lines": 71
+    },
+    {
+      "path": "cluster/tests/17-diskless-load-swapdb.tcl",
+      "lines": 86
+    },
+    {
+      "path": "cluster/tests/18-info.tcl",
+      "lines": 45
+    },
+    {
+      "path": "cluster/tests/19-cluster-nodes-slots.tcl",
+      "lines": 71
+    },
+    {
+      "path": "cluster/tests/20-half-migrated-slot.tcl",
+      "lines": 98
+    },
+    {
+      "path": "cluster/tests/21-many-slot-migration.tcl",
+      "lines": 64
+    },
+    {
+      "path": "cluster/tests/helpers/onlydots.tcl",
+      "lines": 16
+    },
+    {
+      "path": "cluster/tests/includes/init-tests.tcl",
+      "lines": 70
+    },
+    {
+      "path": "cluster/tests/includes/utils.tcl",
+      "lines": 25
+    },
+    {
+      "path": "helpers/bg_block_op.tcl",
+      "lines": 55
+    },
+    {
+      "path": "helpers/bg_complex_data.tcl",
+      "lines": 13
+    },
+    {
+      "path": "helpers/fake_redis_node.tcl",
+      "lines": 58
+    },
+    {
+      "path": "helpers/gen_climbing_load.tcl",
+      "lines": 18
+    },
+    {
+      "path": "helpers/gen_write_load.tcl",
+      "lines": 18
+    },
+    {
+      "path": "instances.tcl",
+      "lines": 685
+    },
+    {
+      "path": "integration/aof-race.tcl",
+      "lines": 36
+    },
+    {
+      "path": "integration/aof.tcl",
+      "lines": 322
+    },
+    {
+      "path": "integration/block-repl.tcl",
+      "lines": 51
+    },
+    {
+      "path": "integration/convert-zipmap-hash-on-load.tcl",
+      "lines": 35
+    },
+    {
+      "path": "integration/corrupt-dump-fuzzer.tcl",
+      "lines": 208
+    },
+    {
+      "path": "integration/corrupt-dump.tcl",
+      "lines": 702
+    },
+    {
+      "path": "integration/failover.tcl",
+      "lines": 295
+    },
+    {
+      "path": "integration/keydb-benchmark.tcl",
+      "lines": 168
+    },
+    {
+      "path": "integration/keydb-cli.tcl",
+      "lines": 374
+    },
+    {
+      "path": "integration/logging.tcl",
+      "lines": 51
+    },
+    {
+      "path": "integration/multimaster-psync.tcl",
+      "lines": 43
+    },
+    {
+      "path": "integration/psync2-pingoff.tcl",
+      "lines": 244
+    },
+    {
+      "path": "integration/psync2-reg-multimaster.tcl",
+      "lines": 106
+    },
+    {
+      "path": "integration/psync2-reg.tcl",
+      "lines": 82
+    },
+    {
+      "path": "integration/psync2.tcl",
+      "lines": 376
+    },
+    {
+      "path": "integration/rdb.tcl",
+      "lines": 329
+    },
+    {
+      "path": "integration/replication-2.tcl",
+      "lines": 115
+    },
+    {
+      "path": "integration/replication-3.tcl",
+      "lines": 134
+    },
+    {
+      "path": "integration/replication-4.tcl",
+      "lines": 231
+    },
+    {
+      "path": "integration/replication-active.tcl",
+      "lines": 356
+    },
+    {
+      "path": "integration/replication-fast.tcl",
+      "lines": 36
+    },
+    {
+      "path": "integration/replication-multimaster-connect.tcl",
+      "lines": 124
+    },
+    {
+      "path": "integration/replication-multimaster.tcl",
+      "lines": 124
+    },
+    {
+      "path": "integration/replication-psync-flash.tcl",
+      "lines": 137
+    },
+    {
+      "path": "integration/replication-psync-multimaster.tcl",
+      "lines": 150
+    },
+    {
+      "path": "integration/replication-psync.tcl",
+      "lines": 141
+    },
+    {
+      "path": "integration/replication.tcl",
+      "lines": 935
+    },
+    {
+      "path": "sentinel/run.tcl",
+      "lines": 27
+    },
+    {
+      "path": "sentinel/tests/00-base.tcl",
+      "lines": 126
+    },
+    {
+      "path": "sentinel/tests/01-conf-update.tcl",
+      "lines": 39
+    },
+    {
+      "path": "sentinel/tests/02-slaves-reconf.tcl",
+      "lines": 84
+    },
+    {
+      "path": "sentinel/tests/03-runtime-reconf.tcl",
+      "lines": 1
+    },
+    {
+      "path": "sentinel/tests/04-slave-selection.tcl",
+      "lines": 5
+    },
+    {
+      "path": "sentinel/tests/05-manual.tcl",
+      "lines": 45
+    },
+    {
+      "path": "sentinel/tests/06-ckquorum.tcl",
+      "lines": 35
+    },
+    {
+      "path": "sentinel/tests/07-down-conditions.tcl",
+      "lines": 80
+    },
+    {
+      "path": "sentinel/tests/08-hostname-conf.tcl",
+      "lines": 67
+    },
+    {
+      "path": "sentinel/tests/09-acl-support.tcl",
+      "lines": 50
+    },
+    {
+      "path": "sentinel/tests/10-replica-priority.tcl",
+      "lines": 73
+    },
+    {
+      "path": "sentinel/tests/helpers/check_leaked_fds.tcl",
+      "lines": 79
+    },
+    {
+      "path": "sentinel/tests/includes/init-tests.tcl",
+      "lines": 80
+    },
+    {
+      "path": "sentinel/tests/includes/start-init-tests.tcl",
+      "lines": 18
+    },
+    {
+      "path": "support/benchmark.tcl",
+      "lines": 19
+    },
+    {
+      "path": "support/cli.tcl",
+      "lines": 19
+    },
+    {
+      "path": "support/cluster.tcl",
+      "lines": 363
+    },
+    {
+      "path": "support/keydb.tcl",
+      "lines": 399
+    },
+    {
+      "path": "support/server.tcl",
+      "lines": 630
+    },
+    {
+      "path": "support/test.tcl",
+      "lines": 216
+    },
+    {
+      "path": "support/tmpfile.tcl",
+      "lines": 15
+    },
+    {
+      "path": "support/util.tcl",
+      "lines": 790
+    },
+    {
+      "path": "test_helper.tcl",
+      "lines": 894
+    },
+    {
+      "path": "unit/acl.tcl",
+      "lines": 631
+    },
+    {
+      "path": "unit/aofrw.tcl",
+      "lines": 206
+    },
+    {
+      "path": "unit/auth.tcl",
+      "lines": 84
+    },
+    {
+      "path": "unit/bitfield.tcl",
+      "lines": 232
+    },
+    {
+      "path": "unit/bitops.tcl",
+      "lines": 437
+    },
+    {
+      "path": "unit/cron.tcl",
+      "lines": 47
+    },
+    {
+      "path": "unit/dump.tcl",
+      "lines": 380
+    },
+    {
+      "path": "unit/expire.tcl",
+      "lines": 515
+    },
+    {
+      "path": "unit/flash.tcl",
+      "lines": 216
+    },
+    {
+      "path": "unit/geo.tcl",
+      "lines": 693
+    },
+    {
+      "path": "unit/hyperloglog.tcl",
+      "lines": 213
+    },
+    {
+      "path": "unit/info.tcl",
+      "lines": 175
+    },
+    {
+      "path": "unit/introspection-2.tcl",
+      "lines": 79
+    },
+    {
+      "path": "unit/introspection.tcl",
+      "lines": 267
+    },
+    {
+      "path": "unit/keyspace.tcl",
+      "lines": 482
+    },
+    {
+      "path": "unit/latency-monitor.tcl",
+      "lines": 79
+    },
+    {
+      "path": "unit/lazyfree.tcl",
+      "lines": 41
+    },
+    {
+      "path": "unit/limits.tcl",
+      "lines": 21
+    },
+    {
+      "path": "unit/loadsave.tcl",
+      "lines": 46
+    },
+    {
+      "path": "unit/maxmemory.tcl",
+      "lines": 339
+    },
+    {
+      "path": "unit/memefficiency.tcl",
+      "lines": 591
+    },
+    {
+      "path": "unit/moduleapi/auth.tcl",
+      "lines": 71
+    },
+    {
+      "path": "unit/moduleapi/basics.tcl",
+      "lines": 12
+    },
+    {
+      "path": "unit/moduleapi/blockedclient.tcl",
+      "lines": 93
+    },
+    {
+      "path": "unit/moduleapi/blockonbackground.tcl",
+      "lines": 117
+    },
+    {
+      "path": "unit/moduleapi/blockonkeys.tcl",
+      "lines": 239
+    },
+    {
+      "path": "unit/moduleapi/commandfilter.tcl",
+      "lines": 84
+    },
+    {
+      "path": "unit/moduleapi/datatype.tcl",
+      "lines": 58
+    },
+    {
+      "path": "unit/moduleapi/defrag.tcl",
+      "lines": 46
+    },
+    {
+      "path": "unit/moduleapi/fork.tcl",
+      "lines": 31
+    },
+    {
+      "path": "unit/moduleapi/getkeys.tcl",
+      "lines": 44
+    },
+    {
+      "path": "unit/moduleapi/hash.tcl",
+      "lines": 23
+    },
+    {
+      "path": "unit/moduleapi/hooks.tcl",
+      "lines": 164
+    },
+    {
+      "path": "unit/moduleapi/infotest.tcl",
+      "lines": 94
+    },
+    {
+      "path": "unit/moduleapi/keyspace_events.tcl",
+      "lines": 86
+    },
+    {
+      "path": "unit/moduleapi/load.tcl",
+      "lines": 15
+    },
+    {
+      "path": "unit/moduleapi/misc.tcl",
+      "lines": 118
+    },
+    {
+      "path": "unit/moduleapi/moduleloadsave.tcl",
+      "lines": 43
+    },
+    {
+      "path": "unit/moduleapi/propagate.tcl",
+      "lines": 268
+    },
+    {
+      "path": "unit/moduleapi/scan.tcl",
+      "lines": 52
+    },
+    {
+      "path": "unit/moduleapi/stream.tcl",
+      "lines": 155
+    },
+    {
+      "path": "unit/moduleapi/test_lazyfree.tcl",
+      "lines": 32
+    },
+    {
+      "path": "unit/moduleapi/testrdb.tcl",
+      "lines": 132
+    },
+    {
+      "path": "unit/moduleapi/timer.tcl",
+      "lines": 57
+    },
+    {
+      "path": "unit/moduleapi/zset.tcl",
+      "lines": 16
+    },
+    {
+      "path": "unit/multi.tcl",
+      "lines": 646
+    },
+    {
+      "path": "unit/networking.tcl",
+      "lines": 36
+    },
+    {
+      "path": "unit/obuf-limits.tcl",
+      "lines": 193
+    },
+    {
+      "path": "unit/oom-score-adj.tcl",
+      "lines": 79
+    },
+    {
+      "path": "unit/other.tcl",
+      "lines": 376
+    },
+    {
+      "path": "unit/pause.tcl",
+      "lines": 251
+    },
+    {
+      "path": "unit/pendingquerybuf.tcl",
+      "lines": 36
+    },
+    {
+      "path": "unit/printver.tcl",
+      "lines": 6
+    },
+    {
+      "path": "unit/protocol.tcl",
+      "lines": 209
+    },
+    {
+      "path": "unit/pubsub.tcl",
+      "lines": 360
+    },
+    {
+      "path": "unit/quit.tcl",
+      "lines": 40
+    },
+    {
+      "path": "unit/replication.tcl",
+      "lines": 12
+    },
+    {
+      "path": "unit/rreplay.tcl",
+      "lines": 30
+    },
+    {
+      "path": "unit/scan.tcl",
+      "lines": 330
+    },
+    {
+      "path": "unit/scripting.tcl",
+      "lines": 985
+    },
+    {
+      "path": "unit/shutdown.tcl",
+      "lines": 58
+    },
+    {
+      "path": "unit/slowlog.tcl",
+      "lines": 177
+    },
+    {
+      "path": "unit/soft_shutdown.tcl",
+      "lines": 141
+    },
+    {
+      "path": "unit/sort.tcl",
+      "lines": 329
+    },
+    {
+      "path": "unit/tls-auditlog.tcl",
+      "lines": 159
+    },
+    {
+      "path": "unit/tls-name-validation.tcl",
+      "lines": 120
+    },
+    {
+      "path": "unit/tls-rotation.tcl",
+      "lines": 109
+    },
+    {
+      "path": "unit/tls.tcl",
+      "lines": 158
+    },
+    {
+      "path": "unit/tracking.tcl",
+      "lines": 591
+    },
+    {
+      "path": "unit/type/hash.tcl",
+      "lines": 840
+    },
+    {
+      "path": "unit/type/incr.tcl",
+      "lines": 164
+    },
+    {
+      "path": "unit/type/list-2.tcl",
+      "lines": 47
+    },
+    {
+      "path": "unit/type/list-3.tcl",
+      "lines": 122
+    },
+    {
+      "path": "unit/type/list-common.tcl",
+      "lines": 5
+    },
+    {
+      "path": "unit/type/list.tcl",
+      "lines": 1167
+    },
+    {
+      "path": "unit/type/nestedhash.tcl",
+      "lines": 54
+    },
+    {
+      "path": "unit/type/set.tcl",
+      "lines": 891
+    },
+    {
+      "path": "unit/type/stream-cgroups.tcl",
+      "lines": 662
+    },
+    {
+      "path": "unit/type/stream.tcl",
+      "lines": 726
+    },
+    {
+      "path": "unit/type/string.tcl",
+      "lines": 587
+    },
+    {
+      "path": "unit/type/zset.tcl",
+      "lines": 1877
+    },
+    {
+      "path": "unit/violations.tcl",
+      "lines": 156
+    },
+    {
+      "path": "unit/wait.tcl",
+      "lines": 58
+    }
+  ],
+  "total_files": 168,
+  "total_lines": 33857
+}

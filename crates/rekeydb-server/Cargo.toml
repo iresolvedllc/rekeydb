@@ -1,0 +1,20 @@
+[package]
+name = "rekeydb-server"
+description = "rekeydb server binary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "rekeydb_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rekeydb"
+path = "src/main.rs"
+
+[dependencies]
+mio.workspace = true
+rekeydb-core.workspace = true
+rekeydb-protocol.workspace = true

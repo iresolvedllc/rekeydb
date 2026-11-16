@@ -1,0 +1,3097 @@
+[
+  {
+    "name": "module",
+    "handler": "moduleCommand",
+    "arity": -2,
+    "flags": [
+      "admin",
+      "no-script"
+    ],
+    "categories": []
+  },
+  {
+    "name": "get",
+    "handler": "getCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "fast",
+      "async",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "getex",
+    "handler": "getexCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "getdel",
+    "handler": "getdelCommand",
+    "arity": 2,
+    "flags": [
+      "write",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "set",
+    "handler": "setCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "setnx",
+    "handler": "setnxCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "setex",
+    "handler": "setexCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "psetex",
+    "handler": "psetexCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "append",
+    "handler": "appendCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "strlen",
+    "handler": "strlenCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "del",
+    "handler": "delCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "expdel",
+    "handler": "delCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "unlink",
+    "handler": "unlinkCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "exists",
+    "handler": "existsCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "keydb.mexists",
+    "handler": "mexistsCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "setbit",
+    "handler": "setbitCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@bitmap"
+    ],
+    "categories": [
+      "@bitmap"
+    ]
+  },
+  {
+    "name": "getbit",
+    "handler": "getbitCommand",
+    "arity": 3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@bitmap"
+    ],
+    "categories": [
+      "@bitmap"
+    ]
+  },
+  {
+    "name": "bitfield",
+    "handler": "bitfieldCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "use-memory",
+      "@bitmap"
+    ],
+    "categories": [
+      "@bitmap"
+    ]
+  },
+  {
+    "name": "bitfield_ro",
+    "handler": "bitfieldroCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@bitmap"
+    ],
+    "categories": [
+      "@bitmap"
+    ]
+  },
+  {
+    "name": "setrange",
+    "handler": "setrangeCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "getrange",
+    "handler": "getrangeCommand",
+    "arity": 4,
+    "flags": [
+      "read-only",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "substr",
+    "handler": "getrangeCommand",
+    "arity": 4,
+    "flags": [
+      "read-only",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "incr",
+    "handler": "incrCommand",
+    "arity": 2,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "decr",
+    "handler": "decrCommand",
+    "arity": 2,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "mget",
+    "handler": "mgetCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "fast",
+      "async",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "rpush",
+    "handler": "rpushCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "lpush",
+    "handler": "lpushCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "rpushx",
+    "handler": "rpushxCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "lpushx",
+    "handler": "lpushxCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "linsert",
+    "handler": "linsertCommand",
+    "arity": 5,
+    "flags": [
+      "write",
+      "use-memory",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "rpop",
+    "handler": "rpopCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "fast",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "lpop",
+    "handler": "lpopCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "fast",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "brpop",
+    "handler": "brpopCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "no-script",
+      "@list",
+      "@blocking"
+    ],
+    "categories": [
+      "@list",
+      "@blocking"
+    ]
+  },
+  {
+    "name": "brpoplpush",
+    "handler": "brpoplpushCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "no-script",
+      "@list",
+      "@blocking"
+    ],
+    "categories": [
+      "@list",
+      "@blocking"
+    ]
+  },
+  {
+    "name": "blmove",
+    "handler": "blmoveCommand",
+    "arity": 6,
+    "flags": [
+      "write",
+      "use-memory",
+      "no-script",
+      "@list",
+      "@blocking"
+    ],
+    "categories": [
+      "@list",
+      "@blocking"
+    ]
+  },
+  {
+    "name": "blpop",
+    "handler": "blpopCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "no-script",
+      "@list",
+      "@blocking"
+    ],
+    "categories": [
+      "@list",
+      "@blocking"
+    ]
+  },
+  {
+    "name": "llen",
+    "handler": "llenCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "lindex",
+    "handler": "lindexCommand",
+    "arity": 3,
+    "flags": [
+      "read-only",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "lset",
+    "handler": "lsetCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "lrange",
+    "handler": "lrangeCommand",
+    "arity": 4,
+    "flags": [
+      "read-only",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "ltrim",
+    "handler": "ltrimCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "lpos",
+    "handler": "lposCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "lrem",
+    "handler": "lremCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "rpoplpush",
+    "handler": "rpoplpushCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "use-memory",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "lmove",
+    "handler": "lmoveCommand",
+    "arity": 5,
+    "flags": [
+      "write",
+      "use-memory",
+      "@list"
+    ],
+    "categories": [
+      "@list"
+    ]
+  },
+  {
+    "name": "sadd",
+    "handler": "saddCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "srem",
+    "handler": "sremCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "fast",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "smove",
+    "handler": "smoveCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "fast",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "sismember",
+    "handler": "sismemberCommand",
+    "arity": 3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "smismember",
+    "handler": "smismemberCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "scard",
+    "handler": "scardCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "spop",
+    "handler": "spopCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "random",
+      "fast",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "srandmember",
+    "handler": "srandmemberCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "random",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "sinter",
+    "handler": "sinterCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "to-sort",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "sinterstore",
+    "handler": "sinterstoreCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "sunion",
+    "handler": "sunionCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "to-sort",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "sunionstore",
+    "handler": "sunionstoreCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "sdiff",
+    "handler": "sdiffCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "to-sort",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "sdiffstore",
+    "handler": "sdiffstoreCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "smembers",
+    "handler": "sinterCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "to-sort",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "sscan",
+    "handler": "sscanCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "random",
+      "@set"
+    ],
+    "categories": [
+      "@set"
+    ]
+  },
+  {
+    "name": "zadd",
+    "handler": "zaddCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zincrby",
+    "handler": "zincrbyCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrem",
+    "handler": "zremCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zremrangebyscore",
+    "handler": "zremrangebyscoreCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zremrangebyrank",
+    "handler": "zremrangebyrankCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zremrangebylex",
+    "handler": "zremrangebylexCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zunionstore",
+    "handler": "zunionstoreCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zinterstore",
+    "handler": "zinterstoreCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zdiffstore",
+    "handler": "zdiffstoreCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zunion",
+    "handler": "zunionCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zinter",
+    "handler": "zinterCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zdiff",
+    "handler": "zdiffCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrange",
+    "handler": "zrangeCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrangestore",
+    "handler": "zrangestoreCommand",
+    "arity": -5,
+    "flags": [
+      "write",
+      "use-memory",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrangebyscore",
+    "handler": "zrangebyscoreCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrevrangebyscore",
+    "handler": "zrevrangebyscoreCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrangebylex",
+    "handler": "zrangebylexCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrevrangebylex",
+    "handler": "zrevrangebylexCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zcount",
+    "handler": "zcountCommand",
+    "arity": 4,
+    "flags": [
+      "read-only",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zlexcount",
+    "handler": "zlexcountCommand",
+    "arity": 4,
+    "flags": [
+      "read-only",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrevrange",
+    "handler": "zrevrangeCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zcard",
+    "handler": "zcardCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zscore",
+    "handler": "zscoreCommand",
+    "arity": 3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zmscore",
+    "handler": "zmscoreCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrank",
+    "handler": "zrankCommand",
+    "arity": 3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zrevrank",
+    "handler": "zrevrankCommand",
+    "arity": 3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zscan",
+    "handler": "zscanCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "random",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zpopmin",
+    "handler": "zpopminCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "zpopmax",
+    "handler": "zpopmaxCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "fast",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "bzpopmin",
+    "handler": "bzpopminCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "no-script",
+      "fast",
+      "@sortedset",
+      "@blocking"
+    ],
+    "categories": [
+      "@sortedset",
+      "@blocking"
+    ]
+  },
+  {
+    "name": "bzpopmax",
+    "handler": "bzpopmaxCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "no-script",
+      "fast",
+      "@sortedset",
+      "@blocking"
+    ],
+    "categories": [
+      "@sortedset",
+      "@blocking"
+    ]
+  },
+  {
+    "name": "zrandmember",
+    "handler": "zrandmemberCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "random",
+      "@sortedset"
+    ],
+    "categories": [
+      "@sortedset"
+    ]
+  },
+  {
+    "name": "hset",
+    "handler": "hsetCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hsetnx",
+    "handler": "hsetnxCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hget",
+    "handler": "hgetCommand",
+    "arity": 3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hmset",
+    "handler": "hsetCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hmget",
+    "handler": "hmgetCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hincrby",
+    "handler": "hincrbyCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hincrbyfloat",
+    "handler": "hincrbyfloatCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hdel",
+    "handler": "hdelCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hlen",
+    "handler": "hlenCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hstrlen",
+    "handler": "hstrlenCommand",
+    "arity": 3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hkeys",
+    "handler": "hkeysCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "to-sort",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hvals",
+    "handler": "hvalsCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "to-sort",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hgetall",
+    "handler": "hgetallCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "random",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hexists",
+    "handler": "hexistsCommand",
+    "arity": 3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hrandfield",
+    "handler": "hrandfieldCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "random",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "hscan",
+    "handler": "hscanCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "random",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "incrby",
+    "handler": "incrbyCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "decrby",
+    "handler": "decrbyCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "incrbyfloat",
+    "handler": "incrbyfloatCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "getset",
+    "handler": "getsetCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "mset",
+    "handler": "msetCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "msetnx",
+    "handler": "msetnxCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "randomkey",
+    "handler": "randomkeyCommand",
+    "arity": 1,
+    "flags": [
+      "read-only",
+      "random",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "select",
+    "handler": "selectCommand",
+    "arity": 2,
+    "flags": [
+      "ok-loading",
+      "fast",
+      "ok-stale",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "swapdb",
+    "handler": "swapdbCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace",
+      "@dangerous"
+    ],
+    "categories": [
+      "@keyspace",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "move",
+    "handler": "moveCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "copy",
+    "handler": "copyCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "use-memory",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "rename",
+    "handler": "renameCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "renamenx",
+    "handler": "renamenxCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "expire",
+    "handler": "expireCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "expireat",
+    "handler": "expireatCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "expiremember",
+    "handler": "expireMemberCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "expirememberat",
+    "handler": "expireMemberAtCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "pexpirememberat",
+    "handler": "pexpireMemberAtCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "pexpire",
+    "handler": "pexpireCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "pexpireat",
+    "handler": "pexpireatCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "keys",
+    "handler": "keysCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "to-sort",
+      "@keyspace",
+      "@dangerous"
+    ],
+    "categories": [
+      "@keyspace",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "scan",
+    "handler": "scanCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "random",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "dbsize",
+    "handler": "dbsizeCommand",
+    "arity": 1,
+    "flags": [
+      "read-only",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "auth",
+    "handler": "authCommand",
+    "arity": -2,
+    "flags": [
+      "no-auth",
+      "no-script",
+      "ok-loading",
+      "ok-stale",
+      "fast",
+      "@connection"
+    ],
+    "categories": [
+      "@connection"
+    ]
+  },
+  {
+    "name": "ping",
+    "handler": "pingCommand",
+    "arity": -1,
+    "flags": [
+      "ok-stale",
+      "ok-loading",
+      "fast",
+      "@connection",
+      "@replication"
+    ],
+    "categories": [
+      "@connection",
+      "@replication"
+    ]
+  },
+  {
+    "name": "replping",
+    "handler": "pingCommand",
+    "arity": -1,
+    "flags": [
+      "ok-stale",
+      "fast",
+      "@connection",
+      "@replication"
+    ],
+    "categories": [
+      "@connection",
+      "@replication"
+    ]
+  },
+  {
+    "name": "echo",
+    "handler": "echoCommand",
+    "arity": 2,
+    "flags": [
+      "fast",
+      "@connection"
+    ],
+    "categories": [
+      "@connection"
+    ]
+  },
+  {
+    "name": "save",
+    "handler": "saveCommand",
+    "arity": 1,
+    "flags": [
+      "admin",
+      "no-script"
+    ],
+    "categories": []
+  },
+  {
+    "name": "bgsave",
+    "handler": "bgsaveCommand",
+    "arity": -1,
+    "flags": [
+      "admin",
+      "no-script"
+    ],
+    "categories": []
+  },
+  {
+    "name": "bgrewriteaof",
+    "handler": "bgrewriteaofCommand",
+    "arity": 1,
+    "flags": [
+      "admin",
+      "no-script"
+    ],
+    "categories": []
+  },
+  {
+    "name": "shutdown",
+    "handler": "shutdownCommand",
+    "arity": -1,
+    "flags": [
+      "admin",
+      "no-script",
+      "ok-loading",
+      "ok-stale",
+      "noprop"
+    ],
+    "categories": []
+  },
+  {
+    "name": "lastsave",
+    "handler": "lastsaveCommand",
+    "arity": 1,
+    "flags": [
+      "random",
+      "fast",
+      "ok-loading",
+      "ok-stale",
+      "@admin",
+      "@dangerous"
+    ],
+    "categories": [
+      "@admin",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "type",
+    "handler": "typeCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "multi",
+    "handler": "multiCommand",
+    "arity": 1,
+    "flags": [
+      "no-script",
+      "fast",
+      "ok-loading",
+      "ok-stale",
+      "@transaction"
+    ],
+    "categories": [
+      "@transaction"
+    ]
+  },
+  {
+    "name": "exec",
+    "handler": "execCommand",
+    "arity": 1,
+    "flags": [
+      "no-script",
+      "no-slowlog",
+      "ok-loading",
+      "ok-stale",
+      "@transaction"
+    ],
+    "categories": [
+      "@transaction"
+    ]
+  },
+  {
+    "name": "discard",
+    "handler": "discardCommand",
+    "arity": 1,
+    "flags": [
+      "no-script",
+      "fast",
+      "ok-loading",
+      "ok-stale",
+      "@transaction"
+    ],
+    "categories": [
+      "@transaction"
+    ]
+  },
+  {
+    "name": "sync",
+    "handler": "syncCommand",
+    "arity": 1,
+    "flags": [
+      "admin",
+      "no-script",
+      "@replication"
+    ],
+    "categories": [
+      "@replication"
+    ]
+  },
+  {
+    "name": "psync",
+    "handler": "syncCommand",
+    "arity": -3,
+    "flags": [
+      "admin",
+      "no-script",
+      "@replication"
+    ],
+    "categories": [
+      "@replication"
+    ]
+  },
+  {
+    "name": "replconf",
+    "handler": "replconfCommand",
+    "arity": -1,
+    "flags": [
+      "admin",
+      "no-script",
+      "ok-loading",
+      "ok-stale",
+      "@replication"
+    ],
+    "categories": [
+      "@replication"
+    ]
+  },
+  {
+    "name": "flushdb",
+    "handler": "flushdbCommand",
+    "arity": -1,
+    "flags": [
+      "write",
+      "@keyspace",
+      "@dangerous"
+    ],
+    "categories": [
+      "@keyspace",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "flushall",
+    "handler": "flushallCommand",
+    "arity": -1,
+    "flags": [
+      "write",
+      "@keyspace",
+      "@dangerous"
+    ],
+    "categories": [
+      "@keyspace",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "sort",
+    "handler": "sortCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "use-memory",
+      "@list",
+      "@set",
+      "@sortedset",
+      "@dangerous"
+    ],
+    "categories": [
+      "@list",
+      "@set",
+      "@sortedset",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "info",
+    "handler": "infoCommand",
+    "arity": -1,
+    "flags": [
+      "ok-loading",
+      "ok-stale",
+      "random",
+      "@dangerous"
+    ],
+    "categories": [
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "monitor",
+    "handler": "monitorCommand",
+    "arity": 1,
+    "flags": [
+      "admin",
+      "no-script",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "ttl",
+    "handler": "ttlCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "fast",
+      "random",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "touch",
+    "handler": "touchCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "pttl",
+    "handler": "pttlCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "fast",
+      "random",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "persist",
+    "handler": "persistCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "slaveof",
+    "handler": "replicaofCommand",
+    "arity": 3,
+    "flags": [
+      "admin",
+      "no-script",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "replicaof",
+    "handler": "replicaofCommand",
+    "arity": -3,
+    "flags": [
+      "admin",
+      "no-script",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "role",
+    "handler": "roleCommand",
+    "arity": 1,
+    "flags": [
+      "ok-loading",
+      "ok-stale",
+      "no-script",
+      "fast",
+      "@dangerous"
+    ],
+    "categories": [
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "debug",
+    "handler": "debugCommand",
+    "arity": -2,
+    "flags": [
+      "admin",
+      "no-script",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "config",
+    "handler": "configCommand",
+    "arity": -2,
+    "flags": [
+      "admin",
+      "ok-loading",
+      "ok-stale",
+      "no-script"
+    ],
+    "categories": []
+  },
+  {
+    "name": "subscribe",
+    "handler": "subscribeCommand",
+    "arity": -2,
+    "flags": [
+      "pub-sub",
+      "no-script",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "unsubscribe",
+    "handler": "unsubscribeCommand",
+    "arity": -1,
+    "flags": [
+      "pub-sub",
+      "no-script",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "psubscribe",
+    "handler": "psubscribeCommand",
+    "arity": -2,
+    "flags": [
+      "pub-sub",
+      "no-script",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "punsubscribe",
+    "handler": "punsubscribeCommand",
+    "arity": -1,
+    "flags": [
+      "pub-sub",
+      "no-script",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "publish",
+    "handler": "publishCommand",
+    "arity": 3,
+    "flags": [
+      "pub-sub",
+      "ok-loading",
+      "ok-stale",
+      "fast",
+      "may-replicate"
+    ],
+    "categories": []
+  },
+  {
+    "name": "pubsub",
+    "handler": "pubsubCommand",
+    "arity": -2,
+    "flags": [
+      "pub-sub",
+      "ok-loading",
+      "ok-stale",
+      "random"
+    ],
+    "categories": []
+  },
+  {
+    "name": "watch",
+    "handler": "watchCommand",
+    "arity": -2,
+    "flags": [
+      "no-script",
+      "fast",
+      "ok-loading",
+      "ok-stale",
+      "@transaction"
+    ],
+    "categories": [
+      "@transaction"
+    ]
+  },
+  {
+    "name": "unwatch",
+    "handler": "unwatchCommand",
+    "arity": 1,
+    "flags": [
+      "no-script",
+      "fast",
+      "ok-loading",
+      "ok-stale",
+      "@transaction"
+    ],
+    "categories": [
+      "@transaction"
+    ]
+  },
+  {
+    "name": "cluster",
+    "handler": "clusterCommand",
+    "arity": -2,
+    "flags": [
+      "admin",
+      "ok-stale",
+      "random"
+    ],
+    "categories": []
+  },
+  {
+    "name": "restore",
+    "handler": "restoreCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@keyspace",
+      "@dangerous"
+    ],
+    "categories": [
+      "@keyspace",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "restore-asking",
+    "handler": "restoreCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "use-memory",
+      "cluster-asking",
+      "@keyspace",
+      "@dangerous"
+    ],
+    "categories": [
+      "@keyspace",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "migrate",
+    "handler": "migrateCommand",
+    "arity": -6,
+    "flags": [
+      "write",
+      "random",
+      "@keyspace",
+      "@dangerous"
+    ],
+    "categories": [
+      "@keyspace",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "asking",
+    "handler": "askingCommand",
+    "arity": 1,
+    "flags": [
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "readonly",
+    "handler": "readonlyCommand",
+    "arity": 1,
+    "flags": [
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "readwrite",
+    "handler": "readwriteCommand",
+    "arity": 1,
+    "flags": [
+      "fast",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "dump",
+    "handler": "dumpCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "random",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "object",
+    "handler": "objectCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "random",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "memory",
+    "handler": "memoryCommand",
+    "arity": -2,
+    "flags": [
+      "random",
+      "read-only"
+    ],
+    "categories": []
+  },
+  {
+    "name": "client",
+    "handler": "clientCommand",
+    "arity": -2,
+    "flags": [
+      "admin",
+      "no-script",
+      "random",
+      "ok-loading",
+      "ok-stale",
+      "@connection"
+    ],
+    "categories": [
+      "@connection"
+    ]
+  },
+  {
+    "name": "hello",
+    "handler": "helloCommand",
+    "arity": -1,
+    "flags": [
+      "no-auth",
+      "no-script",
+      "fast",
+      "ok-loading",
+      "ok-stale",
+      "@connection"
+    ],
+    "categories": [
+      "@connection"
+    ]
+  },
+  {
+    "name": "eval",
+    "handler": "evalCommand",
+    "arity": -3,
+    "flags": [
+      "no-script",
+      "no-monitor",
+      "may-replicate",
+      "@scripting"
+    ],
+    "categories": [
+      "@scripting"
+    ]
+  },
+  {
+    "name": "evalsha",
+    "handler": "evalShaCommand",
+    "arity": -3,
+    "flags": [
+      "no-script",
+      "no-monitor",
+      "may-replicate",
+      "@scripting"
+    ],
+    "categories": [
+      "@scripting"
+    ]
+  },
+  {
+    "name": "slowlog",
+    "handler": "slowlogCommand",
+    "arity": -2,
+    "flags": [
+      "admin",
+      "random",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "script",
+    "handler": "scriptCommand",
+    "arity": -2,
+    "flags": [
+      "no-script",
+      "may-replicate",
+      "@scripting"
+    ],
+    "categories": [
+      "@scripting"
+    ]
+  },
+  {
+    "name": "time",
+    "handler": "timeCommand",
+    "arity": 1,
+    "flags": [
+      "random",
+      "fast",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "bitop",
+    "handler": "bitopCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "use-memory",
+      "@bitmap"
+    ],
+    "categories": [
+      "@bitmap"
+    ]
+  },
+  {
+    "name": "bitcount",
+    "handler": "bitcountCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "@bitmap"
+    ],
+    "categories": [
+      "@bitmap"
+    ]
+  },
+  {
+    "name": "bitpos",
+    "handler": "bitposCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "@bitmap"
+    ],
+    "categories": [
+      "@bitmap"
+    ]
+  },
+  {
+    "name": "wait",
+    "handler": "waitCommand",
+    "arity": 3,
+    "flags": [
+      "no-script",
+      "@keyspace"
+    ],
+    "categories": [
+      "@keyspace"
+    ]
+  },
+  {
+    "name": "command",
+    "handler": "commandCommand",
+    "arity": -1,
+    "flags": [
+      "ok-loading",
+      "ok-stale",
+      "random",
+      "@connection"
+    ],
+    "categories": [
+      "@connection"
+    ]
+  },
+  {
+    "name": "geoadd",
+    "handler": "geoaddCommand",
+    "arity": -5,
+    "flags": [
+      "write",
+      "use-memory",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "georadius",
+    "handler": "georadiusCommand",
+    "arity": -6,
+    "flags": [
+      "write",
+      "use-memory",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "georadius_ro",
+    "handler": "georadiusroCommand",
+    "arity": -6,
+    "flags": [
+      "read-only",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "georadiusbymember",
+    "handler": "georadiusbymemberCommand",
+    "arity": -5,
+    "flags": [
+      "write",
+      "use-memory",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "georadiusbymember_ro",
+    "handler": "georadiusbymemberroCommand",
+    "arity": -5,
+    "flags": [
+      "read-only",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "geohash",
+    "handler": "geohashCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "geopos",
+    "handler": "geoposCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "geodist",
+    "handler": "geodistCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "geosearch",
+    "handler": "geosearchCommand",
+    "arity": -7,
+    "flags": [
+      "read-only",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "geosearchstore",
+    "handler": "geosearchstoreCommand",
+    "arity": -8,
+    "flags": [
+      "write",
+      "use-memory",
+      "@geo"
+    ],
+    "categories": [
+      "@geo"
+    ]
+  },
+  {
+    "name": "pfselftest",
+    "handler": "pfselftestCommand",
+    "arity": 1,
+    "flags": [
+      "admin",
+      "@hyperloglog"
+    ],
+    "categories": [
+      "@hyperloglog"
+    ]
+  },
+  {
+    "name": "pfadd",
+    "handler": "pfaddCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@hyperloglog"
+    ],
+    "categories": [
+      "@hyperloglog"
+    ]
+  },
+  {
+    "name": "pfcount",
+    "handler": "pfcountCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "may-replicate",
+      "@hyperloglog"
+    ],
+    "categories": [
+      "@hyperloglog"
+    ]
+  },
+  {
+    "name": "pfmerge",
+    "handler": "pfmergeCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "use-memory",
+      "@hyperloglog"
+    ],
+    "categories": [
+      "@hyperloglog"
+    ]
+  },
+  {
+    "name": "pfdebug",
+    "handler": "pfdebugCommand",
+    "arity": -3,
+    "flags": [
+      "admin",
+      "write",
+      "use-memory",
+      "@hyperloglog"
+    ],
+    "categories": [
+      "@hyperloglog"
+    ]
+  },
+  {
+    "name": "xadd",
+    "handler": "xaddCommand",
+    "arity": -5,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "random",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xrange",
+    "handler": "xrangeCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xrevrange",
+    "handler": "xrevrangeCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xlen",
+    "handler": "xlenCommand",
+    "arity": 2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xread",
+    "handler": "xreadCommand",
+    "arity": -4,
+    "flags": [
+      "read-only",
+      "@stream",
+      "@blocking"
+    ],
+    "categories": [
+      "@stream",
+      "@blocking"
+    ]
+  },
+  {
+    "name": "xreadgroup",
+    "handler": "xreadCommand",
+    "arity": -7,
+    "flags": [
+      "write",
+      "@stream",
+      "@blocking"
+    ],
+    "categories": [
+      "@stream",
+      "@blocking"
+    ]
+  },
+  {
+    "name": "xgroup",
+    "handler": "xgroupCommand",
+    "arity": -2,
+    "flags": [
+      "write",
+      "use-memory",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xsetid",
+    "handler": "xsetidCommand",
+    "arity": 3,
+    "flags": [
+      "write",
+      "use-memory",
+      "fast",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xack",
+    "handler": "xackCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "fast",
+      "random",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xpending",
+    "handler": "xpendingCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "random",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xclaim",
+    "handler": "xclaimCommand",
+    "arity": -6,
+    "flags": [
+      "write",
+      "random",
+      "fast",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xautoclaim",
+    "handler": "xautoclaimCommand",
+    "arity": -6,
+    "flags": [
+      "write",
+      "random",
+      "fast",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xinfo",
+    "handler": "xinfoCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "random",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xdel",
+    "handler": "xdelCommand",
+    "arity": -3,
+    "flags": [
+      "write",
+      "fast",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "xtrim",
+    "handler": "xtrimCommand",
+    "arity": -4,
+    "flags": [
+      "write",
+      "random",
+      "@stream"
+    ],
+    "categories": [
+      "@stream"
+    ]
+  },
+  {
+    "name": "post",
+    "handler": "securityWarningCommand",
+    "arity": -1,
+    "flags": [
+      "ok-loading",
+      "ok-stale",
+      "read-only"
+    ],
+    "categories": []
+  },
+  {
+    "name": "host:",
+    "handler": "securityWarningCommand",
+    "arity": -1,
+    "flags": [
+      "ok-loading",
+      "ok-stale",
+      "read-only"
+    ],
+    "categories": []
+  },
+  {
+    "name": "latency",
+    "handler": "latencyCommand",
+    "arity": -2,
+    "flags": [
+      "admin",
+      "no-script",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "acl",
+    "handler": "aclCommand",
+    "arity": -2,
+    "flags": [
+      "admin",
+      "no-script",
+      "ok-loading",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "rreplay",
+    "handler": "replicaReplayCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "fast",
+      "noprop",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "keydb.cron",
+    "handler": "cronCommand",
+    "arity": -5,
+    "flags": [
+      "write",
+      "use-memory"
+    ],
+    "categories": []
+  },
+  {
+    "name": "keydb.hrename",
+    "handler": "hrenameCommand",
+    "arity": 4,
+    "flags": [
+      "write",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "stralgo",
+    "handler": "stralgoCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "@string"
+    ],
+    "categories": [
+      "@string"
+    ]
+  },
+  {
+    "name": "keydb.nhget",
+    "handler": "nhgetCommand",
+    "arity": -2,
+    "flags": [
+      "read-only",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "keydb.nhset",
+    "handler": "nhsetCommand",
+    "arity": -3,
+    "flags": [
+      "read-only",
+      "fast",
+      "@hash"
+    ],
+    "categories": [
+      "@hash"
+    ]
+  },
+  {
+    "name": "KEYDB.MVCCRESTORE",
+    "handler": "mvccrestoreCommand",
+    "arity": 5,
+    "flags": [
+      "write",
+      "use-memory",
+      "@keyspace",
+      "@dangerous"
+    ],
+    "categories": [
+      "@keyspace",
+      "@dangerous"
+    ]
+  },
+  {
+    "name": "reset",
+    "handler": "resetCommand",
+    "arity": 1,
+    "flags": [
+      "no-script",
+      "ok-stale",
+      "ok-loading",
+      "fast",
+      "@connection"
+    ],
+    "categories": [
+      "@connection"
+    ]
+  },
+  {
+    "name": "failover",
+    "handler": "failoverCommand",
+    "arity": -1,
+    "flags": [
+      "admin",
+      "no-script",
+      "ok-stale"
+    ],
+    "categories": []
+  },
+  {
+    "name": "lfence",
+    "handler": "lfenceCommand",
+    "arity": 1,
+    "flags": [
+      "read-only",
+      "random",
+      "ok-stale"
+    ],
+    "categories": []
+  }
+]

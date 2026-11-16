@@ -1,0 +1,29 @@
+# Deterministic commands that do not depend on wall-clock time, random
+# selection, or iteration order.
+SET alpha one
+GET alpha
+SET alpha two
+GET alpha
+SET beta three NX
+SET beta four NX
+GET beta
+SET missing value XX
+GET missing
+DEL alpha beta
+GET alpha
+EXISTS alpha
+SET counter 10
+INCR counter
+INCRBY counter 5
+DECR counter
+APPEND text hello
+APPEND text world
+GET text
+STRLEN text
+MSET a 1 b 2 c 3
+MGET a b c missing
+TYPE text
+DBSIZE
+SELECT 1
+DBSIZE
+SELECT 0

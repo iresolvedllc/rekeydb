@@ -1,0 +1,11 @@
+rekeydb is a from-scratch Rust and Zig implementation of the KeyDB server.
+
+KeyDB is Copyright (c) 2006-2020 Salvatore Sanfilippo, 2019-2021 John Sully,
+2020-2021 EQ Alpha Technology Ltd., and 2022 Snap Inc., and is distributed
+under the BSD 3-Clause license. The original KeyDB source tree is kept in
+reference/keydb (or ./KeyDB during the bootstrap phase) for specification,
+conformance testing, and attribution purposes.
+
+Redis is a registered trademark of Redis Ltd. KeyDB is a trademark of its
+respective owners. rekeydb is not affiliated with or endorsed by Redis Ltd.
+or Snap Inc.
