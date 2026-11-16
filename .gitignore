@@ -9,3 +9,6 @@
 /bench/results
 *.log
 .DS_Store
+.direnv/
+.envrc.local
+/zig/.zig-cache/

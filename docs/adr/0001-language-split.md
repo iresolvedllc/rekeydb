@@ -25,7 +25,7 @@ boundary would add allocator, ownership, and latency problems for little gain.
 ## Consequences
 
 - Rust and Zig can be built and tested independently.
-- The Zig toolchain is pinned (0.17.0) and its surface area is kept small.
+- The Zig toolchain is pinned (0.17.1) and its surface area is kept small.
 - A future storage engine can be replaced without touching command semantics.
 - Tools can lag the server without blocking conformance tests; the stock
   KeyDB CLI is used as the test client during bootstrap.

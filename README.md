@@ -49,7 +49,7 @@ make test
 make check
 ```
 
-The pinned toolchain is in `rust-toolchain.toml`. Zig 0.17.0 is pinned in
+The pinned toolchain is in `rust-toolchain.toml`. Zig 0.17.1 is pinned in
 `zig/zig-version`. Build the Zig tools with:
 
 ```sh
