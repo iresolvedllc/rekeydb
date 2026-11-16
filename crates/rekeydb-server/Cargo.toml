@@ -17,4 +17,5 @@ path = "src/main.rs"
 [dependencies]
 mio.workspace = true
 rekeydb-core.workspace = true
+rekeydb-persist.workspace = true
 rekeydb-protocol.workspace = true

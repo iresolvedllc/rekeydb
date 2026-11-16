@@ -93,3 +93,7 @@ unwatch
 rename
 renamenx
 sort
+save
+bgsave
+dump
+restore

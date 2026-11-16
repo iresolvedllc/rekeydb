@@ -15,6 +15,7 @@ pub struct Config {
     pub server_threads: usize,
     pub requirepass: Option<String>,
     pub dir: PathBuf,
+    pub dbfilename: String,
     pub logfile: Option<String>,
     pub config_file: Option<PathBuf>,
 }
@@ -28,6 +29,7 @@ impl Default for Config {
             server_threads: 1,
             requirepass: None,
             dir: PathBuf::from("."),
+            dbfilename: "dump.rdb".to_string(),
             logfile: None,
             config_file: None,
         }
@@ -211,6 +213,7 @@ pub fn parse_str(text: &str) -> Result<Config, String> {
                 };
             }
             "dir" => config.dir = PathBuf::from(value),
+            "dbfilename" => config.dbfilename = value.to_string(),
             "logfile" => {
                 config.logfile = if value.is_empty() {
                     None

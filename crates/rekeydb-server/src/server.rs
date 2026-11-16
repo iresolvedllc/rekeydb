@@ -73,13 +73,20 @@ pub fn run(config: Config) -> Result<(), String> {
         .register(&mut listener, LISTENER, Interest::READABLE)
         .map_err(|err| format!("cannot register listener: {err}"))?;
 
+    let mut state = State::new(config.clone());
+    let rdb_path = config.dir.join(&config.dbfilename);
+    if rdb_path.is_file() {
+        state
+            .reload_rdb_from_disk()
+            .map_err(|err| format!("cannot load {}: {err}", rdb_path.display()))?;
+    }
     let mut server = Server {
         poll,
         registry,
         listener,
         clients: HashMap::new(),
         blocked: Vec::new(),
-        state: Mutex::new(State::new(config.clone())),
+        state: Mutex::new(state),
         next_token: 1,
         next_client_id: 1,
         running: true,
@@ -250,6 +257,12 @@ impl Server {
             let mut state = self.state.lock().expect("state poisoned");
             let outcome = state.execute(&command, &mut client.ctx);
             drop(state);
+            let mut reply = outcome.reply;
+            if let Some((id, as_error)) = outcome.unblock
+                && !self.unblock_by_id(id, as_error)
+            {
+                reply = RespValue::Integer(0);
+            }
             if let Some(block) = outcome.block {
                 let deadline = block
                     .timeout_ms
@@ -261,7 +274,7 @@ impl Server {
                 self.add_blocked(token);
                 break;
             }
-            outcome.reply.encode(client.ctx.version, &mut client.out);
+            reply.encode(client.ctx.version, &mut client.out);
             if outcome.close {
                 close = true;
             }
@@ -392,6 +405,36 @@ impl Server {
     fn restore_blocked(&mut self, position: usize, token: Token) {
         self.blocked.insert(position, token);
         self.state.lock().expect("state poisoned").blocked_clients += 1;
+    }
+
+    fn unblock_by_id(&mut self, id: u64, as_error: bool) -> bool {
+        let Some(token) = self
+            .clients
+            .iter()
+            .find(|(_, client)| client.ctx.id == id && client.blocked.is_some())
+            .map(|(token, _)| *token)
+        else {
+            return false;
+        };
+        self.unblock(token);
+        let Some(mut client) = self.clients.remove(&token) else {
+            return false;
+        };
+        let Some(blocked) = client.blocked.take() else {
+            self.clients.insert(token, client);
+            return false;
+        };
+        let reply = if as_error {
+            RespValue::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
+        } else {
+            match blocked.request.kind {
+                BlockKind::Pop => RespValue::NullArray,
+                BlockKind::Move => RespValue::null(),
+            }
+        };
+        reply.encode(client.ctx.version, &mut client.out);
+        self.process_client(token, client, 0);
+        true
     }
 
     fn unblock(&mut self, token: Token) {

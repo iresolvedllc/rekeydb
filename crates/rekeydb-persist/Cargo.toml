@@ -1,0 +1,11 @@
+[package]
+name = "rekeydb-persist"
+description = "RDB persistence and dataset digests for rekeydb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rekeydb-core.workspace = true
+sha1.workspace = true

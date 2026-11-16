@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rekeydb_core::{Database, EncodingLimits, Entry, ExpireEntry, MvccClock, Snapshot, Value};
+use rekeydb_persist::{RdbEntry, dataset_digest, dump, load, restore, save};
 use rekeydb_protocol::{Command, RespValue, RespVersion};
 
 use crate::config::Config;
@@ -66,6 +67,7 @@ pub struct Outcome {
     pub shutdown: bool,
     pub block: Option<Box<BlockRequest>>,
     pub wake: Vec<(usize, Vec<u8>)>,
+    pub unblock: Option<(u64, bool)>,
 }
 
 impl Outcome {
@@ -76,6 +78,7 @@ impl Outcome {
             shutdown: false,
             block: None,
             wake: Vec::new(),
+            unblock: None,
         }
     }
 
@@ -94,6 +97,7 @@ impl Outcome {
             shutdown: false,
             block: Some(Box::new(request)),
             wake: Vec::new(),
+            unblock: None,
         }
     }
 }
@@ -136,6 +140,7 @@ impl State {
             "requirepass",
             "dir",
             "logfile",
+            "dbfilename",
             "daemonize",
             "protected-mode",
             "maxmemory",
@@ -147,6 +152,8 @@ impl State {
             "timeout",
             "hz",
             "rdbchecksum",
+            "sanitize-dump-payload",
+            "skip-checksum-validation",
             "lazyfree-lazy-eviction",
             "lazyfree-lazy-expire",
             "lazyfree-lazy-server-del",
@@ -201,6 +208,8 @@ impl State {
             "logfile".into(),
             self.config.logfile.clone().unwrap_or_default(),
         );
+        self.config_values
+            .insert("dbfilename".into(), self.config.dbfilename.clone());
         for (key, value) in [
             ("daemonize", "no"),
             ("protected-mode", "yes"),
@@ -213,6 +222,8 @@ impl State {
             ("timeout", "0"),
             ("hz", "10"),
             ("rdbchecksum", "yes"),
+            ("sanitize-dump-payload", "no"),
+            ("skip-checksum-validation", "no"),
             ("lazyfree-lazy-eviction", "no"),
             ("lazyfree-lazy-expire", "no"),
             ("lazyfree-lazy-server-del", "no"),
@@ -356,6 +367,7 @@ impl State {
                 shutdown,
                 block: None,
                 wake,
+                unblock: None,
             };
         }
         if let Some(queue) = client.multi.as_mut() {
@@ -386,6 +398,7 @@ impl State {
                 shutdown: false,
                 block: None,
                 wake: Vec::new(),
+                unblock: None,
             },
             "SELECT" => {
                 if args.len() != 2 {
@@ -604,9 +617,29 @@ impl State {
                 }
             }
             "RENAME" | "RENAMENX" => self.cmd_rename(&name, args, client.db),
+            "DUMP" => self.cmd_dump(args, client.db),
+            "RESTORE" => self.cmd_restore(args, client.db),
             "SORT" => self.cmd_sort(args, client.db),
             "CONFIG" => self.cmd_config(args),
             "DEBUG" => self.cmd_debug(args, client),
+            "SAVE" => {
+                if args.len() != 1 {
+                    return wrong_args(args);
+                }
+                match self.save_rdb_to_disk() {
+                    Ok(()) => Outcome::ok(),
+                    Err(err) => Outcome::error(format!("ERR {err}")),
+                }
+            }
+            "BGSAVE" => {
+                if args.len() > 2 {
+                    return wrong_args(args);
+                }
+                match self.save_rdb_to_disk() {
+                    Ok(()) => Outcome::reply(RespValue::simple("Background saving started")),
+                    Err(err) => Outcome::error(format!("ERR {err}")),
+                }
+            }
             "INFO" => self.cmd_info(args),
             "COMMAND" => self.cmd_command(args),
             "CLIENT" => self.cmd_client(args, client),
@@ -638,6 +671,7 @@ impl State {
                 shutdown: true,
                 block: None,
                 wake: Vec::new(),
+                unblock: None,
             },
             _ => {
                 let mut message = format!(
@@ -2131,6 +2165,86 @@ impl State {
         outcome
     }
 
+    fn cmd_dump(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 2 {
+            return wrong_args(args);
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        let Some(entry) = self.dbs[db_index].get(&args[1]) else {
+            return Outcome::reply(RespValue::null());
+        };
+        match dump(&entry.value) {
+            Ok(payload) => Outcome::reply(RespValue::bulk(payload)),
+            Err(err) => Outcome::error(format!("ERR {err}")),
+        }
+    }
+
+    fn cmd_restore(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 4 {
+            return wrong_args(args);
+        }
+        let Ok(ttl) = parse_i64(&args[2]) else {
+            return Outcome::error("ERR value is not an integer or out of range");
+        };
+        if ttl < 0 {
+            return Outcome::error("ERR Invalid TTL value, must be >= 0");
+        }
+        let mut replace = false;
+        let mut absttl = false;
+        let mut index = 4;
+        while index < args.len() {
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "REPLACE" => {
+                    replace = true;
+                    index += 1;
+                }
+                "ABSTTL" => {
+                    absttl = true;
+                    index += 1;
+                }
+                "IDLETIME" | "FREQ" => {
+                    let Some(value) = args.get(index + 1) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    if parse_i64(value).is_err() {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    }
+                    index += 2;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        if self.dbs[db_index].contains_key(&args[1]) && !replace {
+            return Outcome::error("BUSYKEY Target key name already exists.");
+        }
+        let value = match restore(&args[3]) {
+            Ok(value) => value,
+            Err(_) => {
+                return Outcome::error("ERR DUMP payload version or checksum are wrong");
+            }
+        };
+        let expire = if ttl == 0 {
+            ExpireEntry::new()
+        } else {
+            let when = if absttl {
+                ttl
+            } else {
+                self.now_ms().saturating_add(ttl)
+            };
+            let mut expire = ExpireEntry::new();
+            expire.set_primary(when);
+            expire
+        };
+        let mvcc = self.clock.next(self.now_ms());
+        self.dbs[db_index].insert_entry(
+            args[1].clone(),
+            Entry::with_expire(Arc::new(value), expire, mvcc),
+        );
+        Outcome::ok()
+    }
+
     fn cmd_sort(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
         if args.len() < 2 {
             return wrong_args(args);
@@ -2531,12 +2645,104 @@ impl State {
                 );
                 Outcome::reply(RespValue::bulk(line.into_bytes()))
             }
+            "UNBLOCK" => {
+                if args.len() < 3 || args.len() > 4 {
+                    return client_error(&sub);
+                }
+                let Ok(id) = parse_u64(&args[2]) else {
+                    return Outcome::error("ERR value is not an integer or out of range");
+                };
+                let as_error = args
+                    .get(3)
+                    .is_some_and(|mode| mode.eq_ignore_ascii_case(b"ERROR"));
+                Outcome {
+                    reply: RespValue::Integer(1),
+                    close: false,
+                    shutdown: false,
+                    block: None,
+                    wake: Vec::new(),
+                    unblock: Some((id, as_error)),
+                }
+            }
             "SETINFO" => Outcome::ok(),
             _ => Outcome::error(format!(
                 "ERR Unknown subcommand or wrong number of arguments for '{}'. Try CLIENT HELP.",
                 String::from_utf8_lossy(&args[1])
             )),
         }
+    }
+
+    fn rdb_path(&self) -> std::path::PathBuf {
+        self.config.dir.join(&self.config.dbfilename)
+    }
+
+    fn save_rdb_to_disk(&mut self) -> Result<(), String> {
+        let path = self.rdb_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        let now = self.now_ms();
+        let mut entries = Vec::new();
+        for (db_index, db) in self.dbs.iter().enumerate() {
+            for (key, entry) in db.collect_visible() {
+                if entry.is_expired(now) {
+                    continue;
+                }
+                let expire = entry.expire.primary();
+                entries.push(RdbEntry {
+                    db: db_index,
+                    key,
+                    value: (*entry.value).clone(),
+                    expire_ms: expire,
+                });
+            }
+        }
+        let bytes = save(&entries).map_err(|err| err.to_string())?;
+        std::fs::write(&path, bytes).map_err(|err| format!("{}: {err}", path.display()))
+    }
+
+    pub fn reload_rdb_from_disk(&mut self) -> Result<(), String> {
+        let path = self.rdb_path();
+        let bytes = std::fs::read(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+        let entries = load(&bytes).map_err(|err| err.to_string())?;
+        for db in &mut self.dbs {
+            db.clear();
+        }
+        let now = self.now_ms();
+        for entry in entries {
+            if entry.expire_ms.is_some_and(|expire| expire <= now) {
+                continue;
+            }
+            let mut expire = ExpireEntry::new();
+            if let Some(when) = entry.expire_ms {
+                expire.set_primary(when);
+            }
+            let mvcc = self.clock.next(now);
+            self.dbs[entry.db].insert_entry(
+                entry.key,
+                Entry::with_expire(Arc::new(entry.value), expire, mvcc),
+            );
+        }
+        Ok(())
+    }
+
+    fn digest_entries(&self) -> Vec<(usize, Vec<u8>, Value, bool)> {
+        let now = self.now_ms();
+        let mut entries = Vec::new();
+        for (db_index, db) in self.dbs.iter().enumerate() {
+            for (key, entry) in db.collect_visible() {
+                if entry.is_expired(now) {
+                    continue;
+                }
+                entries.push((
+                    db_index,
+                    key,
+                    (*entry.value).clone(),
+                    entry.expire.primary().is_some(),
+                ));
+            }
+        }
+        entries
     }
 
     fn cmd_debug(&mut self, args: &[Vec<u8>], client: &mut ClientContext) -> Outcome {
@@ -2609,6 +2815,30 @@ impl State {
                     std::thread::sleep(std::time::Duration::from_secs_f64(seconds.min(60.0)));
                 }
                 Outcome::ok()
+            }
+            "RELOAD" => {
+                if args.len() != 2 {
+                    return wrong_args(args);
+                }
+                if let Err(err) = self.save_rdb_to_disk() {
+                    return Outcome::error(format!("ERR {err}"));
+                }
+                match self.reload_rdb_from_disk() {
+                    Ok(()) => Outcome::ok(),
+                    Err(err) => Outcome::error(format!("ERR {err}")),
+                }
+            }
+            "DIGEST" => {
+                if args.len() != 2 {
+                    return wrong_args(args);
+                }
+                let entries = self.digest_entries();
+                let digest = dataset_digest(
+                    entries
+                        .iter()
+                        .map(|(db, key, value, expire)| (*db, key.as_slice(), value, *expire)),
+                );
+                Outcome::reply(RespValue::simple(digest))
             }
             "PROTOCOL" => {
                 if args.len() != 3 {
@@ -2891,6 +3121,13 @@ fn parse_i64(value: &[u8]) -> Result<i64, ()> {
         .map_err(|_| ())
 }
 
+fn parse_u64(value: &[u8]) -> Result<u64, ()> {
+    std::str::from_utf8(value)
+        .map_err(|_| ())?
+        .parse::<u64>()
+        .map_err(|_| ())
+}
+
 fn parse_usize(value: &[u8]) -> Result<usize, ()> {
     std::str::from_utf8(value)
         .map_err(|_| ())?
@@ -2910,6 +3147,8 @@ fn is_modifiable_config(key: &str) -> bool {
             | "tcp-keepalive"
             | "timeout"
             | "hz"
+            | "sanitize-dump-payload"
+            | "skip-checksum-validation"
             | "lazyfree-lazy-eviction"
             | "lazyfree-lazy-expire"
             | "lazyfree-lazy-server-del"
@@ -3616,6 +3855,59 @@ mod tests {
             ),
             RespValue::Array(vec![RespValue::Integer(6), RespValue::Integer(5)])
         );
+    }
+
+    #[test]
+    fn debug_reload_preserves_values_and_digest() {
+        let dir = std::env::temp_dir().join(format!("rekeydb-rdb-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config {
+            databases: 4,
+            dir: dir.clone(),
+            ..Config::default()
+        };
+        let mut state = State::new(config);
+        state.set_now_ms(1_700_000_000_000);
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"SET", b"s", b"value"]);
+        run(&mut state, &mut client, &[b"RPUSH", b"l", b"a", b"b", b"c"]);
+        run(
+            &mut state,
+            &mut client,
+            &[b"SADD", b"set", b"1", b"2", b"3"],
+        );
+        run(&mut state, &mut client, &[b"PEXPIRE", b"s", b"60000"]);
+        let before = run(&mut state, &mut client, &[b"DEBUG", b"DIGEST"]);
+        let RespValue::SimpleString(before) = before else {
+            panic!("expected digest status");
+        };
+        assert_eq!(before.len(), 40);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"DEBUG", b"RELOAD"]),
+            RespValue::ok()
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"GET", b"s"]),
+            RespValue::bulk(b"value".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LRANGE", b"l", b"0", b"-1"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"a".to_vec()),
+                RespValue::bulk(b"b".to_vec()),
+                RespValue::bulk(b"c".to_vec())
+            ])
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SCARD", b"set"]),
+            RespValue::Integer(3)
+        );
+        let after = run(&mut state, &mut client, &[b"DEBUG", b"DIGEST"]);
+        let RespValue::SimpleString(after) = after else {
+            panic!("expected digest status");
+        };
+        assert_eq!(before, after);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

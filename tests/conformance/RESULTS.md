@@ -5,9 +5,9 @@
 The adapted harness runs KeyDB's `unit/protocol.tcl` (22 tests). rekeydb
 passes all 22, including the blocking `BLPOP` pipelining regression.
 
-The list suite (`unit/type/list.tcl`) reaches 80 passing tests before it needs
-`DEBUG RELOAD` (RDB support). Lists, blocking pops/moves, `MULTI`/`EXEC`,
-basic `WATCH`, `RENAME`, and `SORT ... STORE` are implemented.
+The list suite (`unit/type/list.tcl`) passes all **176** tests, including
+`DEBUG RELOAD`, `DUMP`/`RESTORE`, blocking pops/moves, `MULTI`/`EXEC`, basic
+`WATCH`, `RENAME`, and `SORT ... STORE`.
 
 The reference binary passes all 22 protocol tests.
 
@@ -38,7 +38,10 @@ it has been built.
 - 29 set commands including encodings, wrong-type errors, stores, and
   single-member random operations;
 - 32 list/transaction commands including blocking wakeups, moves, `MULTI`,
-  `EXEC`, `RENAME`, and `SORT ... STORE`.
+  `EXEC`, `RENAME`, and `SORT ... STORE`;
+- RDB files and `DUMP` payloads both ways with KeyDB for strings, lists, sets,
+  and expirations;
+- `DEBUG DIGEST` values match KeyDB exactly on the current types.
 
 ## Oracle build
 
@@ -48,6 +51,6 @@ and Ubuntu install `uuid-dev`, `libssl-dev`, and `zlib1g-dev`.
 
 ## Next
 
-- RDB v9 load/save and `DEBUG RELOAD`/`DEBUG DIGEST`.
 - Hashes and sorted sets with Redis 6.2 encodings.
-- Remaining list-suite gaps after reload support.
+- AOF and `BGREWRITEAOF`.
+- Compact RDB output (quicklist/ziplist/intset) for byte-level parity.

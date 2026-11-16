@@ -20,7 +20,7 @@ fi
 
 cargo build -q -p rekeydb-server --bin rekeydb
 binary="${REKEYDB_BINARY:-$root/target/debug/rekeydb}"
-run_dir="$root/tests/tmp/conformance"
+run_dir="$root/tests/tmp/conformance-$$"
 
 rm -rf "$run_dir"
 mkdir -p "$run_dir/src"

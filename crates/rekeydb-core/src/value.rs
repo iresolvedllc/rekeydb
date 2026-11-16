@@ -32,12 +32,12 @@ impl Default for EncodingLimits {
 
 /// Sorted set placeholder. A skiplist-backed implementation lands with the
 /// ZSET command family; scores are authoritative here.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SortedSet {
     pub scores: HashMap<Vec<u8>, f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(Vec<u8>),
     List(VecDeque<Vec<u8>>),

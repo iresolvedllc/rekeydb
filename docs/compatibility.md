@@ -10,7 +10,7 @@ every row eventually lands.
 | Commands | strings, lists, sets, keyspace | hashes, zsets | remaining 236 |
 | Expiry | primary TTL | subkey expiry | active cycle parity |
 | MVCC | snapshot core + `DEBUG MVCC` | save/reload readers | async end |
-| Persistence | — | RDB load/save, DUMP | AOF |
+| Persistence | RDB v9 load/save, DUMP/RESTORE, DIGEST | AOF | AOF rewrite |
 | Replication | — | — | PSYNC, active replica |
 | Cluster | — | — | bus, slots, failover |
 | Scripting | — | — | Lua 5.1 |

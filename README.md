@@ -22,7 +22,9 @@ Bootstrap / P0. Working today:
 - strings, lists, sets, expiry, keyspace commands, `OBJECT ENCODING`,
   `DEBUG MVCC`, `DEBUG PROTOCOL`, `HELLO`, `CLIENT`, `CONFIG`, `INFO`, basic
   `MULTI`/`EXEC`/`WATCH`, `SORT`, and a conformance harness passing all 22
-  KeyDB `unit/protocol.tcl` tests;
+  KeyDB `unit/protocol.tcl` tests and all 176 `unit/type/list.tcl` tests;
+- RDB v9 save/load, `SAVE`/`BGSAVE`, `DEBUG RELOAD`, `DEBUG DIGEST`, and
+  `DUMP`/`RESTORE`, cross-compatible with KeyDB in both directions;
 - generated command/config/test manifests and a Zig `rekeydb-cli`.
 
 The reference KeyDB tree lives in `KeyDB/` (development snapshot) and
@@ -34,6 +36,7 @@ inputs for the specification extractor and conformance oracle.
 ```
 crates/rekeydb-protocol   RESP2/RESP3 codec
 crates/rekeydb-core       dict, values, MVCC snapshots, expiry
+crates/rekeydb-persist    RDB v9, DUMP/RESTORE, dataset digests
 crates/rekeydb-server     server binary
 xtask                     spec extraction and developer tasks
 spec/                     generated command/config/test manifests

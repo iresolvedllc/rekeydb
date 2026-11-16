@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 91 / 236
+Implemented: 95 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -11,7 +11,7 @@ Implemented: 91 / 236
 | @geo | 0 | 10 |
 | @hash | 0 | 19 |
 | @hyperloglog | 0 | 5 |
-| @keyspace | 23 | 39 |
+| @keyspace | 25 | 39 |
 | @list | 21 | 21 |
 | @replication | 0 | 3 |
 | @scripting | 0 | 3 |
@@ -20,7 +20,7 @@ Implemented: 91 / 236
 | @stream | 0 | 15 |
 | @string | 12 | 22 |
 | @transaction | 5 | 5 |
-| uncategorized | 4 | 28 |
+| uncategorized | 6 | 28 |
 
 ## Missing
 
@@ -95,8 +95,6 @@ Implemented: 91 / 236
 - `expirememberat`
 - `pexpirememberat`
 - `replping`
-- `save`
-- `bgsave`
 - `bgrewriteaof`
 - `sync`
 - `psync`
@@ -111,13 +109,11 @@ Implemented: 91 / 236
 - `publish`
 - `pubsub`
 - `cluster`
-- `restore`
 - `restore-asking`
 - `migrate`
 - `asking`
 - `readonly`
 - `readwrite`
-- `dump`
 - `memory`
 - `eval`
 - `evalsha`
