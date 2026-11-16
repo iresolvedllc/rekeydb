@@ -19,7 +19,7 @@ if [ ! -f "$reference/tests/test_helper.tcl" ]; then
 fi
 
 cargo build -q -p rekeydb-server --bin rekeydb
-binary="$root/target/debug/rekeydb"
+binary="${REKEYDB_BINARY:-$root/target/debug/rekeydb}"
 run_dir="$root/tests/tmp/conformance"
 
 rm -rf "$run_dir"

@@ -537,8 +537,11 @@ impl State {
             }
         }
 
+        if nx && xx {
+            return Outcome::error("ERR syntax error");
+        }
         if expire_at.is_some_and(|when| when <= now) {
-            return Outcome::error("ERR invalid expire time in 'set' command");
+            return Outcome::error("ERR invalid expire time in set");
         }
 
         let previous = self.existing(client.db, &args[1]);
@@ -1003,10 +1006,15 @@ impl State {
         }
         let sub = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
         match sub.as_str() {
-            "ID" => Outcome::reply(RespValue::Integer(client.id as i64)),
+            "ID" => {
+                if args.len() != 2 {
+                    return client_error(&sub);
+                }
+                Outcome::reply(RespValue::Integer(client.id as i64))
+            }
             "SETNAME" => {
                 if args.len() != 3 {
-                    return wrong_args(args);
+                    return client_error(&sub);
                 }
                 if args[2].iter().any(|byte| *byte <= b' ' || *byte == 0x7f) {
                     return Outcome::error(
@@ -1017,6 +1025,9 @@ impl State {
                 Outcome::ok()
             }
             "GETNAME" => {
+                if args.len() != 2 {
+                    return client_error(&sub);
+                }
                 if client.name.is_empty() {
                     Outcome::reply(RespValue::null())
                 } else {
@@ -1024,6 +1035,9 @@ impl State {
                 }
             }
             "LIST" | "INFO" => {
+                if args.len() > 2 {
+                    return client_error(&sub);
+                }
                 let line = format!(
                     "id={} addr={} laddr=127.0.0.1:{} fd=-1 name={} age={} idle=0 flags=N db={} sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=0 tot-net-in=0 tot-net-out=0 rbs=1024 rbp=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user=default redir=-1 resp={}\n",
                     client.id,
@@ -1231,7 +1245,7 @@ impl State {
         }
         let Some(expected) = self.config.requirepass.as_ref() else {
             return Outcome::error(
-                "ERR Client sent AUTH, but no password is set. Did you mean AUTH <username> <password>?",
+                "ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?",
             );
         };
         let (user, password) = if args.len() == 2 {
@@ -1266,6 +1280,12 @@ fn fnv1a(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+fn client_error(subcommand: &str) -> Outcome {
+    Outcome::error(format!(
+        "ERR Unknown subcommand or wrong number of arguments for '{subcommand}'. Try CLIENT HELP."
+    ))
 }
 
 fn wrong_args(args: &[Vec<u8>]) -> Outcome {
