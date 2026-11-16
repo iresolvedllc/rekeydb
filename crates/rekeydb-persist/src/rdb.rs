@@ -8,7 +8,7 @@
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rekeydb_core::Value;
+use rekeydb_core::{HashValue, Value};
 
 use crate::crc64::crc64;
 use crate::lzf;
@@ -18,6 +18,7 @@ const RDB_VERSION: u32 = 9;
 const RDB_TYPE_STRING: u8 = 0;
 const RDB_TYPE_LIST: u8 = 1;
 const RDB_TYPE_SET: u8 = 2;
+const RDB_TYPE_HASH: u8 = 4;
 const RDB_TYPE_HASH_ZIPMAP: u8 = 9;
 const RDB_TYPE_LIST_ZIPLIST: u8 = 10;
 const RDB_TYPE_SET_INTSET: u8 = 11;
@@ -132,7 +133,7 @@ fn object_type(value: &Value) -> Result<u8, RdbError> {
         Value::Set(set) if !set.is_empty() => Ok(RDB_TYPE_SET),
         Value::List(_) => Err(RdbError::UnsupportedValue("empty list")),
         Value::Set(_) => Err(RdbError::UnsupportedValue("empty set")),
-        Value::Hash(_) => Err(RdbError::UnsupportedValue("hash")),
+        Value::Hash(_) => Ok(RDB_TYPE_HASH),
         Value::ZSet(_) => Err(RdbError::UnsupportedValue("zset")),
     }
 }
@@ -152,7 +153,14 @@ fn write_object_value(out: &mut Vec<u8>, value: &Value) -> Result<(), RdbError> 
                 write_string(out, member);
             }
         }
-        Value::Hash(_) | Value::ZSet(_) => unreachable!("object_type rejects these"),
+        Value::Hash(map) => {
+            write_len(out, map.len() as u64);
+            for (field, value) in map {
+                write_string(out, field);
+                write_string(out, value);
+            }
+        }
+        Value::ZSet(_) => unreachable!("object_type rejects zsets"),
     }
     Ok(())
 }
@@ -309,6 +317,16 @@ fn read_object(kind: u8, reader: &mut Reader<'_>) -> Result<Value, RdbError> {
             }
             Ok(Value::Set(set))
         }
+        RDB_TYPE_HASH => {
+            let length = reader.len()? as usize;
+            let mut hash = HashValue::with_capacity(length);
+            for _ in 0..length {
+                let field = reader.string()?;
+                let value = reader.string()?;
+                hash.insert(field, value);
+            }
+            Ok(Value::Hash(hash))
+        }
         RDB_TYPE_SET_INTSET => {
             let blob = reader.string()?;
             Ok(Value::Set(parse_intset(&blob)?))
@@ -328,10 +346,24 @@ fn read_object(kind: u8, reader: &mut Reader<'_>) -> Result<Value, RdbError> {
             let values = ziplist::parse(&blob).map_err(RdbError::Corrupt)?;
             Ok(Value::List(values.into_iter().collect()))
         }
-        RDB_TYPE_HASH_ZIPMAP
-        | RDB_TYPE_ZSET_ZIPLIST
-        | RDB_TYPE_HASH_ZIPLIST
-        | RDB_TYPE_STREAM_LISTPACKS => Err(RdbError::UnsupportedType(kind)),
+        RDB_TYPE_HASH_ZIPLIST => {
+            let blob = reader.string()?;
+            let values = ziplist::parse(&blob).map_err(RdbError::Corrupt)?;
+            if !values.len().is_multiple_of(2) {
+                return Err(RdbError::Corrupt(
+                    "hash ziplist has an odd number of entries".to_string(),
+                ));
+            }
+            let mut hash = HashValue::with_capacity(values.len() / 2);
+            let mut iter = values.into_iter();
+            while let (Some(field), Some(value)) = (iter.next(), iter.next()) {
+                hash.insert(field, value);
+            }
+            Ok(Value::Hash(hash))
+        }
+        RDB_TYPE_HASH_ZIPMAP | RDB_TYPE_ZSET_ZIPLIST | RDB_TYPE_STREAM_LISTPACKS => {
+            Err(RdbError::UnsupportedType(kind))
+        }
         _ => Err(RdbError::UnsupportedType(kind)),
     }
 }
@@ -510,6 +542,8 @@ mod tests {
 
     #[test]
     fn roundtrips_supported_values() {
+        let mut hash = HashValue::new();
+        hash.insert(b"field".to_vec(), b"value".to_vec());
         let mut set = HashSet::new();
         set.insert(b"one".to_vec());
         set.insert(b"2".to_vec());
@@ -520,10 +554,11 @@ mod tests {
                 Some(1_700_000_000_000),
             ),
             entry(Value::Set(set), None),
+            entry(Value::Hash(hash), None),
         ];
         let bytes = save(&entries).unwrap();
         let loaded = load(&bytes).unwrap();
-        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded.len(), 4);
         assert_eq!(loaded[0].key, b"key");
         assert_eq!(loaded[1].expire_ms, Some(1_700_000_000_000));
         match &loaded[1].value {
@@ -531,6 +566,12 @@ mod tests {
                 assert_eq!(list, &VecDeque::from(vec![b"a".to_vec(), b"b".to_vec()]))
             }
             _ => panic!("expected list"),
+        }
+        match &loaded[3].value {
+            Value::Hash(hash) => {
+                assert_eq!(hash.get(b"field".as_slice()), Some(&b"value".to_vec()))
+            }
+            _ => panic!("expected hash"),
         }
     }
 

@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 95 / 236
+Implemented: 112 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -9,7 +9,7 @@ Implemented: 95 / 236
 | @connection | 7 | 8 |
 | @dangerous | 2 | 2 |
 | @geo | 0 | 10 |
-| @hash | 0 | 19 |
+| @hash | 17 | 19 |
 | @hyperloglog | 0 | 5 |
 | @keyspace | 25 | 39 |
 | @list | 21 | 21 |
@@ -70,22 +70,6 @@ Implemented: 95 / 236
 - `bzpopmin`
 - `bzpopmax`
 - `zrandmember`
-- `hset`
-- `hsetnx`
-- `hget`
-- `hmset`
-- `hmget`
-- `hincrby`
-- `hincrbyfloat`
-- `hdel`
-- `hlen`
-- `hstrlen`
-- `hkeys`
-- `hvals`
-- `hgetall`
-- `hexists`
-- `hrandfield`
-- `hscan`
 - `incrbyfloat`
 - `msetnx`
 - `swapdb`
@@ -158,7 +142,6 @@ Implemented: 95 / 236
 - `acl`
 - `rreplay`
 - `keydb.cron`
-- `keydb.hrename`
 - `stralgo`
 - `keydb.nhget`
 - `keydb.nhset`

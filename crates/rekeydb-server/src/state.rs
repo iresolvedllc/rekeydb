@@ -3,7 +3,9 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use rekeydb_core::{Database, EncodingLimits, Entry, ExpireEntry, MvccClock, Snapshot, Value};
+use rekeydb_core::{
+    Database, EncodingLimits, Entry, ExpireEntry, HashValue, MvccClock, Snapshot, Value,
+};
 use rekeydb_persist::{RdbEntry, dataset_digest, dump, load, restore, save};
 use rekeydb_protocol::{Command, RespValue, RespVersion};
 
@@ -570,6 +572,10 @@ impl State {
             "BLPOP" | "BRPOP" => self.cmd_bpop(&name, args, client.db),
             "BRPOPLPUSH" => self.cmd_brpoplpush(args, client.db),
             "BLMOVE" => self.cmd_blmove(args, client.db),
+            "KEYDB.HRENAME" => self.cmd_hrename(args, client.db),
+            "HSET" | "HSETNX" | "HMSET" | "HGET" | "HMGET" | "HDEL" | "HLEN" | "HSTRLEN"
+            | "HKEYS" | "HVALS" | "HGETALL" | "HEXISTS" | "HINCRBY" | "HINCRBYFLOAT"
+            | "HRANDFIELD" | "HSCAN" => self.cmd_hash(&name, args, client.db, client.version),
             "SADD" | "SREM" | "SCARD" | "SISMEMBER" | "SMISMEMBER" | "SMEMBERS" | "SPOP"
             | "SRANDMEMBER" | "SMOVE" | "SINTER" | "SUNION" | "SDIFF" | "SINTERSTORE"
             | "SUNIONSTORE" | "SDIFFSTORE" | "SSCAN" => {
@@ -1681,6 +1687,450 @@ impl State {
             ListSide::Right => list.push_back(value.clone()),
         }
         Ok(Some(value))
+    }
+
+    fn cmd_hrename(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 4 {
+            return wrong_args(args);
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        if !self.dbs[db_index].contains_key(&args[1]) {
+            return Outcome::reply(RespValue::null());
+        }
+        let mvcc = self.clock.next(self.now_ms());
+        let hash = match self.hash_for_write(db_index, &args[1], mvcc) {
+            Ok(hash) => hash,
+            Err(outcome) => return outcome,
+        };
+        let Some(value) = hash.shift_remove(&args[2]) else {
+            return Outcome::error("ERR hash key doesn't exist");
+        };
+        hash.insert(args[3].clone(), value);
+        Outcome::reply(RespValue::Integer(1))
+    }
+
+    fn cmd_hash(
+        &mut self,
+        command: &str,
+        args: &[Vec<u8>],
+        db_index: usize,
+        version: RespVersion,
+    ) -> Outcome {
+        match command {
+            "HSET" | "HMSET" => {
+                if args.len() < 4 || !args.len().is_multiple_of(2) {
+                    return wrong_args(args);
+                }
+                let mvcc = self.clock.next(self.now_ms());
+                let hash = match self.hash_for_write(db_index, &args[1], mvcc) {
+                    Ok(hash) => hash,
+                    Err(outcome) => return outcome,
+                };
+                let mut created = 0;
+                for pair in args[2..].chunks(2) {
+                    if hash.insert(pair[0].clone(), pair[1].clone()).is_none() {
+                        created += 1;
+                    }
+                }
+                if command == "HMSET" {
+                    Outcome::ok()
+                } else {
+                    Outcome::reply(RespValue::Integer(created))
+                }
+            }
+            "HSETNX" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let mvcc = self.clock.next(self.now_ms());
+                let hash = match self.hash_for_write(db_index, &args[1], mvcc) {
+                    Ok(hash) => hash,
+                    Err(outcome) => return outcome,
+                };
+                if hash.contains_key(&args[2]) {
+                    Outcome::reply(RespValue::Integer(0))
+                } else {
+                    hash.insert(args[2].clone(), args[3].clone());
+                    Outcome::reply(RespValue::Integer(1))
+                }
+            }
+            "HGET" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => match hash.get(&args[2]) {
+                        Some(value) => Outcome::reply(RespValue::bulk(value.clone())),
+                        None => Outcome::reply(RespValue::null()),
+                    },
+                    Ok(None) => Outcome::reply(RespValue::null()),
+                    Err(outcome) => outcome,
+                }
+            }
+            "HMGET" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => Outcome::reply(RespValue::Array(
+                        args[2..]
+                            .iter()
+                            .map(|field| match hash.get(field) {
+                                Some(value) => RespValue::bulk(value.clone()),
+                                None => RespValue::null(),
+                            })
+                            .collect(),
+                    )),
+                    Ok(None) => Outcome::reply(RespValue::Array(
+                        args[2..].iter().map(|_| RespValue::null()).collect(),
+                    )),
+                    Err(outcome) => outcome,
+                }
+            }
+            "HDEL" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(_)) => Outcome::reply(RespValue::Integer(self.remove_hash_fields(
+                        db_index,
+                        &args[1],
+                        &args[2..],
+                    ) as i64)),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "HLEN" => {
+                if args.len() != 2 {
+                    return wrong_args(args);
+                }
+                match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => Outcome::reply(RespValue::Integer(hash.len() as i64)),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "HSTRLEN" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => Outcome::reply(RespValue::Integer(
+                        hash.get(&args[2]).map_or(0, |value| value.len()) as i64,
+                    )),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "HKEYS" | "HVALS" | "HGETALL" => {
+                if args.len() != 2 {
+                    return wrong_args(args);
+                }
+                let hash = match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => hash,
+                    Ok(None) => return Outcome::reply(RespValue::Array(Vec::new())),
+                    Err(outcome) => return outcome,
+                };
+                let mut values = Vec::new();
+                for field in hash.keys() {
+                    let value = hash.get(field).expect("field exists");
+                    if command == "HGETALL" {
+                        values.push(RespValue::bulk(field.clone()));
+                        values.push(RespValue::bulk(value.clone()));
+                    } else if command == "HKEYS" {
+                        values.push(RespValue::bulk(field.clone()));
+                    } else {
+                        values.push(RespValue::bulk(value.clone()));
+                    }
+                }
+                Outcome::reply(RespValue::Array(values))
+            }
+            "HEXISTS" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => {
+                        Outcome::reply(RespValue::Integer(i64::from(hash.contains_key(&args[2]))))
+                    }
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "HINCRBY" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let Ok(increment) = parse_i64(&args[3]) else {
+                    return Outcome::error("ERR value is not an integer or out of range");
+                };
+                let current = match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => match hash.get(&args[2]) {
+                        Some(value) => match parse_i64(value) {
+                            Ok(value) => value,
+                            Err(_) => {
+                                return Outcome::error("ERR hash value is not an integer");
+                            }
+                        },
+                        None => 0,
+                    },
+                    Ok(None) => 0,
+                    Err(outcome) => return outcome,
+                };
+                let Some(value) = current.checked_add(increment) else {
+                    return Outcome::error("ERR increment or decrement would overflow");
+                };
+                let mvcc = self.clock.next(self.now_ms());
+                match self.hash_for_write(db_index, &args[1], mvcc) {
+                    Ok(hash) => {
+                        hash.insert(args[2].clone(), value.to_string().into_bytes());
+                        Outcome::reply(RespValue::Integer(value))
+                    }
+                    Err(outcome) => outcome,
+                }
+            }
+            "HINCRBYFLOAT" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let Some(increment) = std::str::from_utf8(&args[3])
+                    .ok()
+                    .and_then(|text| text.parse::<f64>().ok())
+                else {
+                    return Outcome::error("ERR value is not a valid float");
+                };
+                if !increment.is_finite() {
+                    return Outcome::error("ERR value is NaN or Infinity");
+                }
+                let current = match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => match hash.get(&args[2]) {
+                        Some(value) => match std::str::from_utf8(value)
+                            .ok()
+                            .and_then(|text| text.parse::<f64>().ok())
+                        {
+                            Some(value) => value,
+                            None => {
+                                return Outcome::error("ERR hash value is not a float");
+                            }
+                        },
+                        None => 0.0,
+                    },
+                    Ok(None) => 0.0,
+                    Err(outcome) => return outcome,
+                };
+                let value = current + increment;
+                if !value.is_finite() {
+                    return Outcome::error("ERR increment would produce NaN or Infinity");
+                }
+                let text = format_float(value);
+                let mvcc = self.clock.next(self.now_ms());
+                match self.hash_for_write(db_index, &args[1], mvcc) {
+                    Ok(hash) => {
+                        hash.insert(args[2].clone(), text.clone().into_bytes());
+                        Outcome::reply(RespValue::bulk(text.into_bytes()))
+                    }
+                    Err(outcome) => outcome,
+                }
+            }
+            "HRANDFIELD" => {
+                if args.len() < 2 || args.len() > 4 {
+                    return wrong_args(args);
+                }
+                let with_values = args
+                    .get(3)
+                    .is_some_and(|option| option.eq_ignore_ascii_case(b"WITHVALUES"));
+                if args.len() == 4 && !with_values {
+                    return Outcome::error("ERR syntax error");
+                }
+                let count = if args.len() >= 3 {
+                    match parse_i64(&args[2]) {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return Outcome::error("ERR value is not an integer or out of range");
+                        }
+                    }
+                } else {
+                    None
+                };
+                if count.is_some_and(|count| count.unsigned_abs() > 1_000_000) {
+                    return Outcome::error("ERR value is out of range");
+                }
+                let hash = match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => hash,
+                    Ok(None) => {
+                        return if count.is_none() {
+                            Outcome::reply(RespValue::null())
+                        } else {
+                            Outcome::reply(RespValue::Array(Vec::new()))
+                        };
+                    }
+                    Err(outcome) => return outcome,
+                };
+                let fields: Vec<Vec<u8>> = hash.keys().cloned().collect();
+                let seed = self.now_ms().unsigned_abs() ^ fnv1a(&args[1]);
+                let Some(count) = count else {
+                    let field = &fields[(seed as usize) % fields.len()];
+                    return Outcome::reply(RespValue::bulk(field.clone()));
+                };
+                if count == 0 {
+                    return Outcome::reply(RespValue::Array(Vec::new()));
+                }
+                let take = count.unsigned_abs() as usize;
+                let mut selected = Vec::with_capacity(take);
+                let unique = count > 0;
+                if unique {
+                    let take = take.min(fields.len());
+                    let start = (seed as usize) % fields.len();
+                    for offset in 0..take {
+                        selected.push(fields[(start + offset) % fields.len()].clone());
+                    }
+                } else {
+                    for offset in 0..take {
+                        selected.push(fields[(seed as usize + offset) % fields.len()].clone());
+                    }
+                }
+                if with_values {
+                    let mut values = Vec::new();
+                    for field in selected {
+                        let value = hash.get(&field).expect("field exists").clone();
+                        if version == RespVersion::V3 {
+                            values.push(RespValue::Array(vec![
+                                RespValue::bulk(field),
+                                RespValue::bulk(value),
+                            ]));
+                        } else {
+                            values.push(RespValue::bulk(field));
+                            values.push(RespValue::bulk(value));
+                        }
+                    }
+                    Outcome::reply(RespValue::Array(values))
+                } else {
+                    Outcome::reply(RespValue::Array(
+                        selected.into_iter().map(RespValue::bulk).collect(),
+                    ))
+                }
+            }
+            "HSCAN" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                let Ok(cursor) = parse_usize(&args[2]) else {
+                    return Outcome::error("ERR invalid cursor");
+                };
+                let mut count = 10usize;
+                let mut pattern: Option<&[u8]> = None;
+                let mut index = 3;
+                while index < args.len() {
+                    let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+                    match option.as_str() {
+                        "MATCH" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Outcome::error("ERR syntax error");
+                            };
+                            pattern = Some(value);
+                            index += 2;
+                        }
+                        "COUNT" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Outcome::error("ERR syntax error");
+                            };
+                            let Ok(value) = parse_usize(value) else {
+                                return Outcome::error(
+                                    "ERR value is not an integer or out of range",
+                                );
+                            };
+                            count = value.max(1);
+                            index += 2;
+                        }
+                        _ => return Outcome::error("ERR syntax error"),
+                    }
+                }
+                let hash = match self.get_hash(db_index, &args[1]) {
+                    Ok(Some(hash)) => hash,
+                    Ok(None) => {
+                        return Outcome::reply(RespValue::Array(vec![
+                            RespValue::bulk(b"0".to_vec()),
+                            RespValue::Array(Vec::new()),
+                        ]));
+                    }
+                    Err(outcome) => return outcome,
+                };
+                let fields: Vec<Vec<u8>> = hash
+                    .keys()
+                    .filter(|field| pattern.is_none_or(|pattern| glob_match(pattern, field)))
+                    .cloned()
+                    .collect();
+                let start = cursor.min(fields.len());
+                let end = start.saturating_add(count).min(fields.len());
+                let next = if end >= fields.len() { 0 } else { end };
+                let mut values = Vec::new();
+                for field in &fields[start..end] {
+                    values.push(RespValue::bulk(field.clone()));
+                    values.push(RespValue::bulk(
+                        hash.get(field).expect("field exists").clone(),
+                    ));
+                }
+                Outcome::reply(RespValue::Array(vec![
+                    RespValue::bulk(next.to_string().into_bytes()),
+                    RespValue::Array(values),
+                ]))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn get_hash(&mut self, db_index: usize, key: &[u8]) -> Result<Option<HashValue>, Outcome> {
+        self.expire_if_needed(db_index, key);
+        match self.dbs[db_index].get(key) {
+            Some(entry) => match entry.value.as_hash() {
+                Some(hash) => Ok(Some(hash.clone())),
+                None => Err(wrong_type()),
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn hash_for_write(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+        mvcc: u64,
+    ) -> Result<&mut HashValue, Outcome> {
+        if !self.dbs[db_index].contains_key(key) {
+            self.dbs[db_index].insert(key, Value::Hash(HashValue::new()), mvcc);
+        }
+        let Some(entry) = self.dbs[db_index].get_mut(key) else {
+            return Err(wrong_type());
+        };
+        entry.mvcc = mvcc;
+        let value = Arc::make_mut(&mut entry.value);
+        match value {
+            Value::Hash(hash) => Ok(hash),
+            _ => Err(wrong_type()),
+        }
+    }
+
+    fn remove_hash_fields(&mut self, db_index: usize, key: &[u8], fields: &[Vec<u8>]) -> usize {
+        let mvcc = self.clock.next(self.now_ms());
+        let mut removed = 0;
+        let mut empty = false;
+        if let Some(entry) = self.dbs[db_index].get_mut(key) {
+            entry.mvcc = mvcc;
+            let value = Arc::make_mut(&mut entry.value);
+            if let Value::Hash(hash) = value {
+                for field in fields {
+                    if hash.shift_remove(field).is_some() {
+                        removed += 1;
+                    }
+                }
+                empty = hash.is_empty();
+            }
+        }
+        if empty {
+            self.dbs[db_index].remove(key);
+        }
+        removed
     }
 
     fn cmd_set_command(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
@@ -3031,6 +3481,22 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
+fn format_float(value: f64) -> String {
+    let mut text = format!("{value}");
+    if text.contains('e') || text.contains('E') {
+        return text;
+    }
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    text
+}
+
 fn normalize_index(len: usize, requested: i64) -> Option<usize> {
     let len = len as i64;
     let index = if requested < 0 {
@@ -3876,6 +4342,11 @@ mod tests {
             &mut client,
             &[b"SADD", b"set", b"1", b"2", b"3"],
         );
+        run(
+            &mut state,
+            &mut client,
+            &[b"HSET", b"h", b"a", b"1", b"b", b"2"],
+        );
         run(&mut state, &mut client, &[b"PEXPIRE", b"s", b"60000"]);
         let before = run(&mut state, &mut client, &[b"DEBUG", b"DIGEST"]);
         let RespValue::SimpleString(before) = before else {
@@ -3902,12 +4373,136 @@ mod tests {
             run(&mut state, &mut client, &[b"SCARD", b"set"]),
             RespValue::Integer(3)
         );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"HGET", b"h", b"a"]),
+            RespValue::bulk(b"1".to_vec())
+        );
         let after = run(&mut state, &mut client, &[b"DEBUG", b"DIGEST"]);
         let RespValue::SimpleString(after) = after else {
             panic!("expected digest status");
         };
         assert_eq!(before, after);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn hash_commands_and_encoding() {
+        let mut state = state();
+        let mut client = new_client();
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"HSET", b"h", b"a", b"1", b"b", b"2"]
+            ),
+            RespValue::Integer(2)
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"HSET", b"h", b"a", b"9", b"c", b"3"]
+            ),
+            RespValue::Integer(1)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"HLEN", b"h"]),
+            RespValue::Integer(3)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"HGET", b"h", b"a"]),
+            RespValue::bulk(b"9".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"HMGET", b"h", b"a", b"missing"]),
+            RespValue::Array(vec![RespValue::bulk(b"9".to_vec()), RespValue::null()])
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"HINCRBY", b"h", b"a", b"1"]),
+            RespValue::Integer(10)
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"HINCRBYFLOAT", b"h", b"a", b"0.5"]
+            ),
+            RespValue::bulk(b"10.5".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"OBJECT", b"ENCODING", b"h"]),
+            RespValue::bulk(b"ziplist".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"TYPE", b"h"]),
+            RespValue::simple("hash")
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"HDEL", b"h", b"b", b"missing"]),
+            RespValue::Integer(1)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"HGETALL", b"h"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"a".to_vec()),
+                RespValue::bulk(b"10.5".to_vec()),
+                RespValue::bulk(b"c".to_vec()),
+                RespValue::bulk(b"3".to_vec())
+            ])
+        );
+    }
+
+    #[test]
+    fn hash_promotes_and_scans() {
+        let mut state = state();
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"HSET", b"h", b"a", b"1"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"OBJECT", b"ENCODING", b"h"]),
+            RespValue::bulk(b"ziplist".to_vec())
+        );
+        run(
+            &mut state,
+            &mut client,
+            &[b"HSET", b"h", b"long", &[b'x'; 80]],
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"OBJECT", b"ENCODING", b"h"]),
+            RespValue::bulk(b"hashtable".to_vec())
+        );
+        let scan = run(
+            &mut state,
+            &mut client,
+            &[b"HSCAN", b"h", b"0", b"COUNT", b"100"],
+        );
+        let RespValue::Array(parts) = scan else {
+            panic!("expected scan array");
+        };
+        assert_eq!(parts[0], RespValue::bulk(b"0".to_vec()));
+        let RespValue::Array(values) = &parts[1] else {
+            panic!("expected values");
+        };
+        assert_eq!(values.len(), 4);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"HEXISTS", b"h", b"a"]),
+            RespValue::Integer(1)
+        );
+    }
+
+    #[test]
+    fn hash_wrongtype() {
+        let mut state = state();
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"SET", b"s", b"value"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"HSET", b"s", b"a", b"1"]),
+            RespValue::error("WRONGTYPE Operation against a key holding the wrong kind of value")
+        );
+        run(&mut state, &mut client, &[b"HSET", b"h", b"a", b"1"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"GET", b"h"]),
+            RespValue::error("WRONGTYPE Operation against a key holding the wrong kind of value")
+        );
     }
 
     #[test]

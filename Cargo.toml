@@ -19,6 +19,7 @@ rekeydb-core = { path = "crates/rekeydb-core" }
 rekeydb-persist = { path = "crates/rekeydb-persist" }
 rekeydb-protocol = { path = "crates/rekeydb-protocol" }
 
+indexmap = "2.14"
 mio = { version = "1.2", features = ["net", "os-poll"] }
 regex = "1.13"
 serde = { version = "1.0", features = ["derive"] }

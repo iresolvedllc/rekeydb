@@ -9,6 +9,10 @@ The list suite (`unit/type/list.tcl`) passes all **176** tests, including
 `DEBUG RELOAD`, `DUMP`/`RESTORE`, blocking pops/moves, `MULTI`/`EXEC`, basic
 `WATCH`, `RENAME`, and `SORT ... STORE`.
 
+The hash suite (`unit/type/hash.tcl`) passes all **76** tests, including
+ziplist/hashtable promotion, `HRANDFIELD`, `HSCAN`, `HINCRBYFLOAT`, encoding
+edge cases, `DUMP`/`RESTORE`, and `KEYDB.HRENAME`.
+
 The reference binary passes all 22 protocol tests.
 
 ## Running
@@ -39,9 +43,10 @@ it has been built.
   single-member random operations;
 - 32 list/transaction commands including blocking wakeups, moves, `MULTI`,
   `EXEC`, `RENAME`, and `SORT ... STORE`;
-- RDB files and `DUMP` payloads both ways with KeyDB for strings, lists, sets,
-  and expirations;
-- `DEBUG DIGEST` values match KeyDB exactly on the current types.
+- RDB files and `DUMP` payloads both ways with KeyDB for strings, lists,
+  hashes, sets, and expirations;
+- `DEBUG DIGEST` values match KeyDB exactly on strings, lists, hashes, sets,
+  and expirations.
 
 ## Oracle build
 
@@ -51,6 +56,7 @@ and Ubuntu install `uuid-dev`, `libssl-dev`, and `zlib1g-dev`.
 
 ## Next
 
-- Hashes and sorted sets with Redis 6.2 encodings.
+- Sorted sets and blocking `BZPOPMIN`/`BZPOPMAX`.
 - AOF and `BGREWRITEAOF`.
-- Compact RDB output (quicklist/ziplist/intset) for byte-level parity.
+- Compact RDB output (quicklist/ziplist/intset/hash-ziplist) for byte-level
+  parity.

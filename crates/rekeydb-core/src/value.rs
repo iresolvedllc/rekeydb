@@ -8,6 +8,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use indexmap::IndexMap;
+
 /// Thresholds mirrored from Redis 6.2 / KeyDB configuration defaults.
 #[derive(Debug, Clone, Copy)]
 pub struct EncodingLimits {
@@ -37,11 +39,13 @@ pub struct SortedSet {
     pub scores: HashMap<Vec<u8>, f64>,
 }
 
+pub type HashValue = IndexMap<Vec<u8>, Vec<u8>>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(Vec<u8>),
     List(VecDeque<Vec<u8>>),
-    Hash(HashMap<Vec<u8>, Vec<u8>>),
+    Hash(HashValue),
     Set(HashSet<Vec<u8>>),
     ZSet(SortedSet),
 }
@@ -172,6 +176,20 @@ impl Value {
     pub fn as_list_mut(&mut self) -> Option<&mut VecDeque<Vec<u8>>> {
         match self {
             Self::List(list) => Some(list),
+            _ => None,
+        }
+    }
+
+    pub fn as_hash(&self) -> Option<&HashValue> {
+        match self {
+            Self::Hash(map) => Some(map),
+            _ => None,
+        }
+    }
+
+    pub fn as_hash_mut(&mut self) -> Option<&mut HashValue> {
+        match self {
+            Self::Hash(map) => Some(map),
             _ => None,
         }
     }
