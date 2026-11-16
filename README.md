@@ -19,9 +19,10 @@ Bootstrap / P0. Working today:
 - a `mio` event loop with a global state lock and batched command execution;
 - an MVCC snapshot database with tombstones, nested read views, COW values,
   and KeyDB-compatible timestamps;
-- strings, sets, expiry, keyspace commands, `OBJECT ENCODING`, `DEBUG MVCC`,
-  `DEBUG PROTOCOL`, `HELLO`, `CLIENT`, `CONFIG`, `INFO`, and a conformance
-  harness passing 21 of 22 KeyDB `unit/protocol.tcl` tests;
+- strings, lists, sets, expiry, keyspace commands, `OBJECT ENCODING`,
+  `DEBUG MVCC`, `DEBUG PROTOCOL`, `HELLO`, `CLIENT`, `CONFIG`, `INFO`, basic
+  `MULTI`/`EXEC`/`WATCH`, `SORT`, and a conformance harness passing all 22
+  KeyDB `unit/protocol.tcl` tests;
 - generated command/config/test manifests and a Zig `rekeydb-cli`.
 
 The reference KeyDB tree lives in `KeyDB/` (development snapshot) and

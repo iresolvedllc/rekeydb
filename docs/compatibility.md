@@ -7,7 +7,7 @@ every row eventually lands.
 |---|---|---|---|
 | RESP2 | yes | — | — |
 | RESP3 | codec, attributes, `HELLO` | push/tracking | — |
-| Commands | strings + sets + keyspace | lists, hashes, zsets | remaining 236 |
+| Commands | strings, lists, sets, keyspace | hashes, zsets | remaining 236 |
 | Expiry | primary TTL | subkey expiry | active cycle parity |
 | MVCC | snapshot core + `DEBUG MVCC` | save/reload readers | async end |
 | Persistence | — | RDB load/save, DUMP | AOF |

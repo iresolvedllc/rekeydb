@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -17,6 +17,8 @@ pub struct ClientContext {
     pub name: Vec<u8>,
     pub version: RespVersion,
     pub addr: String,
+    pub multi: Option<Vec<Command>>,
+    pub watched: Vec<(usize, Vec<u8>, u64)>,
 }
 
 impl ClientContext {
@@ -27,8 +29,34 @@ impl ClientContext {
             name: Vec::new(),
             version: RespVersion::V2,
             addr,
+            multi: None,
+            watched: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListSide {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockKind {
+    Pop,
+    Move,
+}
+
+/// A client waiting for data on one or more list keys.
+#[derive(Debug, Clone)]
+pub struct BlockRequest {
+    pub db: usize,
+    pub keys: Vec<Vec<u8>>,
+    pub kind: BlockKind,
+    pub source_side: ListSide,
+    pub destination: Option<Vec<u8>>,
+    pub destination_side: ListSide,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +64,8 @@ pub struct Outcome {
     pub reply: RespValue,
     pub close: bool,
     pub shutdown: bool,
+    pub block: Option<Box<BlockRequest>>,
+    pub wake: Vec<(usize, Vec<u8>)>,
 }
 
 impl Outcome {
@@ -44,6 +74,8 @@ impl Outcome {
             reply,
             close: false,
             shutdown: false,
+            block: None,
+            wake: Vec::new(),
         }
     }
 
@@ -53,6 +85,16 @@ impl Outcome {
 
     pub fn error(message: impl Into<Vec<u8>>) -> Self {
         Self::reply(RespValue::error(message))
+    }
+
+    pub fn blocked(request: BlockRequest) -> Self {
+        Self {
+            reply: RespValue::Null,
+            close: false,
+            shutdown: false,
+            block: Some(Box::new(request)),
+            wake: Vec::new(),
+        }
     }
 }
 
@@ -78,6 +120,7 @@ pub struct State {
     debug_snapshots: Vec<Option<Arc<Snapshot<Value>>>>,
     encoding_limits: EncodingLimits,
     pub connected_clients: usize,
+    pub blocked_clients: usize,
 }
 
 impl State {
@@ -129,6 +172,7 @@ impl State {
             debug_snapshots: (0..databases).map(|_| None).collect(),
             encoding_limits: EncodingLimits::default(),
             connected_clients: 0,
+            blocked_clients: 0,
         };
         state.refresh_config_values();
         state
@@ -232,6 +276,93 @@ impl State {
         }
         let name = String::from_utf8_lossy(&args[0]).to_ascii_uppercase();
         self.stats.total_commands_processed += 1;
+
+        if name == "MULTI" {
+            if args.len() != 1 {
+                return wrong_args(args);
+            }
+            if client.multi.is_some() {
+                return Outcome::error("ERR MULTI calls can not be nested");
+            }
+            client.multi = Some(Vec::new());
+            return Outcome::ok();
+        }
+        if name == "DISCARD" {
+            if args.len() != 1 {
+                return wrong_args(args);
+            }
+            if client.multi.take().is_none() {
+                return Outcome::error("ERR DISCARD without MULTI");
+            }
+            client.watched.clear();
+            return Outcome::ok();
+        }
+        if name == "WATCH" {
+            if args.len() < 2 {
+                return wrong_args(args);
+            }
+            if client.multi.is_some() {
+                return Outcome::error("ERR WATCH inside MULTI is not allowed");
+            }
+            for key in &args[1..] {
+                self.expire_if_needed(client.db, key);
+                let version = self.dbs[client.db].get(key).map_or(0, |entry| entry.mvcc);
+                client.watched.push((client.db, key.clone(), version));
+            }
+            return Outcome::ok();
+        }
+        if name == "UNWATCH" {
+            if args.len() != 1 {
+                return wrong_args(args);
+            }
+            client.watched.clear();
+            return Outcome::ok();
+        }
+        if name == "EXEC" {
+            if args.len() != 1 {
+                return wrong_args(args);
+            }
+            let Some(commands) = client.multi.take() else {
+                return Outcome::error("ERR EXEC without MULTI");
+            };
+            let dirty = client.watched.iter().any(|(db, key, version)| {
+                self.dbs[*db].get(key).map_or(0, |entry| entry.mvcc) != *version
+            });
+            client.watched.clear();
+            if dirty {
+                return Outcome::reply(RespValue::NullArray);
+            }
+            let mut replies = Vec::with_capacity(commands.len());
+            let mut wake = Vec::new();
+            let mut close = false;
+            let mut shutdown = false;
+            for command in commands {
+                let outcome = self.execute(&command, client);
+                if let Some(block) = outcome.block {
+                    replies.push(match block.kind {
+                        BlockKind::Pop => RespValue::NullArray,
+                        BlockKind::Move => RespValue::null(),
+                    });
+                } else {
+                    replies.push(outcome.reply);
+                }
+                wake.extend(outcome.wake);
+                close |= outcome.close;
+                shutdown |= outcome.shutdown;
+            }
+            return Outcome {
+                reply: RespValue::Array(replies),
+                close,
+                shutdown,
+                block: None,
+                wake,
+            };
+        }
+        if let Some(queue) = client.multi.as_mut() {
+            queue.push(command.clone());
+            return Outcome::reply(RespValue::simple("QUEUED"));
+        }
+
         match name.as_str() {
             "PING" => {
                 if args.len() == 1 {
@@ -253,6 +384,8 @@ impl State {
                 reply: RespValue::ok(),
                 close: true,
                 shutdown: false,
+                block: None,
+                wake: Vec::new(),
             },
             "SELECT" => {
                 if args.len() != 2 {
@@ -417,6 +550,13 @@ impl State {
                     None => Outcome::reply(RespValue::Integer(0)),
                 }
             }
+            "LPUSH" | "RPUSH" | "LPUSHX" | "RPUSHX" | "LPOP" | "RPOP" | "LLEN" | "LINDEX"
+            | "LSET" | "LRANGE" | "LTRIM" | "LREM" | "LINSERT" | "LPOS" | "RPOPLPUSH" | "LMOVE" => {
+                self.cmd_list_command(&name, args, client.db)
+            }
+            "BLPOP" | "BRPOP" => self.cmd_bpop(&name, args, client.db),
+            "BRPOPLPUSH" => self.cmd_brpoplpush(args, client.db),
+            "BLMOVE" => self.cmd_blmove(args, client.db),
             "SADD" | "SREM" | "SCARD" | "SISMEMBER" | "SMISMEMBER" | "SMEMBERS" | "SPOP"
             | "SRANDMEMBER" | "SMOVE" | "SINTER" | "SUNION" | "SDIFF" | "SINTERSTORE"
             | "SUNIONSTORE" | "SDIFFSTORE" | "SSCAN" => {
@@ -463,6 +603,8 @@ impl State {
                     Outcome::reply(RespValue::bulk(keys[index].clone()))
                 }
             }
+            "RENAME" | "RENAMENX" => self.cmd_rename(&name, args, client.db),
+            "SORT" => self.cmd_sort(args, client.db),
             "CONFIG" => self.cmd_config(args),
             "DEBUG" => self.cmd_debug(args, client),
             "INFO" => self.cmd_info(args),
@@ -494,6 +636,8 @@ impl State {
                 reply: RespValue::ok(),
                 close: true,
                 shutdown: true,
+                block: None,
+                wake: Vec::new(),
             },
             _ => {
                 let mut message = format!(
@@ -834,6 +978,675 @@ impl State {
         for key in expired {
             self.dbs[db_index].remove(&key);
         }
+    }
+
+    fn cmd_list_command(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        match command {
+            "LPUSH" | "RPUSH" | "LPUSHX" | "RPUSHX" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                self.expire_if_needed(db_index, &args[1]);
+                let only_existing = command.ends_with('X');
+                if only_existing && !self.dbs[db_index].contains_key(&args[1]) {
+                    return Outcome::reply(RespValue::Integer(0));
+                }
+                let mvcc = self.clock.next(self.now_ms());
+                let list = match self.list_for_write(db_index, &args[1], mvcc) {
+                    Ok(list) => list,
+                    Err(outcome) => return outcome,
+                };
+                if command.starts_with('L') {
+                    for value in &args[2..] {
+                        list.push_front(value.clone());
+                    }
+                } else {
+                    for value in &args[2..] {
+                        list.push_back(value.clone());
+                    }
+                }
+                let mut outcome = Outcome::reply(RespValue::Integer(list.len() as i64));
+                outcome.wake.push((db_index, args[1].clone()));
+                outcome
+            }
+            "LLEN" => {
+                if args.len() != 2 {
+                    return wrong_args(args);
+                }
+                match self.get_list(db_index, &args[1]) {
+                    Ok(Some(list)) => Outcome::reply(RespValue::Integer(list.len() as i64)),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "LPOP" | "RPOP" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return wrong_args(args);
+                }
+                let count = if args.len() == 3 {
+                    let Ok(count) = parse_i64(&args[2]) else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    if count < 0 {
+                        return Outcome::error("ERR value is out of range, must be positive");
+                    }
+                    if count == 0 {
+                        return Outcome::reply(RespValue::NullArray);
+                    }
+                    Some(count as usize)
+                } else {
+                    None
+                };
+                self.expire_if_needed(db_index, &args[1]);
+                if !self.dbs[db_index].contains_key(&args[1]) {
+                    return Outcome::reply(RespValue::null());
+                }
+                let side = if command == "LPOP" {
+                    ListSide::Left
+                } else {
+                    ListSide::Right
+                };
+                let mut popped = Vec::new();
+                let empty;
+                {
+                    let Some(entry) = self.dbs[db_index].get_mut(&args[1]) else {
+                        return Outcome::reply(RespValue::null());
+                    };
+                    let value = Arc::make_mut(&mut entry.value);
+                    let Some(list) = value.as_list_mut() else {
+                        return wrong_type();
+                    };
+                    let take = count.unwrap_or(1);
+                    for _ in 0..take {
+                        let item = match side {
+                            ListSide::Left => list.pop_front(),
+                            ListSide::Right => list.pop_back(),
+                        };
+                        match item {
+                            Some(item) => popped.push(item),
+                            None => break,
+                        }
+                    }
+                    empty = list.is_empty();
+                }
+                if empty {
+                    self.dbs[db_index].remove(&args[1]);
+                }
+                if count.is_none() {
+                    match popped.into_iter().next() {
+                        Some(value) => Outcome::reply(RespValue::bulk(value)),
+                        None => Outcome::reply(RespValue::null()),
+                    }
+                } else {
+                    Outcome::reply(RespValue::Array(
+                        popped.into_iter().map(RespValue::bulk).collect(),
+                    ))
+                }
+            }
+            "LINDEX" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                let Ok(requested) = parse_i64(&args[2]) else {
+                    return Outcome::error("ERR value is not an integer or out of range");
+                };
+                match self.get_list(db_index, &args[1]) {
+                    Ok(Some(list)) => {
+                        let index = normalize_index(list.len(), requested);
+                        match index.and_then(|index| list.get(index)) {
+                            Some(value) => Outcome::reply(RespValue::bulk(value.clone())),
+                            None => Outcome::reply(RespValue::null()),
+                        }
+                    }
+                    Ok(None) => Outcome::reply(RespValue::null()),
+                    Err(outcome) => outcome,
+                }
+            }
+            "LSET" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let Ok(requested) = parse_i64(&args[2]) else {
+                    return Outcome::error("ERR value is not an integer or out of range");
+                };
+                let Some(entry) = self.dbs[db_index].get_mut(&args[1]) else {
+                    return Outcome::error("ERR no such key");
+                };
+                let value = Arc::make_mut(&mut entry.value);
+                let Some(list) = value.as_list_mut() else {
+                    return wrong_type();
+                };
+                let index = normalize_index(list.len(), requested);
+                let Some(index) = index else {
+                    return Outcome::error("ERR index out of range");
+                };
+                list[index] = args[3].clone();
+                Outcome::ok()
+            }
+            "LRANGE" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let (Ok(start), Ok(stop)) = (parse_i64(&args[2]), parse_i64(&args[3])) else {
+                    return Outcome::error("ERR value is not an integer or out of range");
+                };
+                match self.get_list(db_index, &args[1]) {
+                    Ok(Some(list)) => {
+                        let Some((start, stop)) = normalize_range(list.len(), start, stop) else {
+                            return Outcome::reply(RespValue::Array(Vec::new()));
+                        };
+                        Outcome::reply(RespValue::Array(
+                            list.range(start..=stop)
+                                .cloned()
+                                .map(RespValue::bulk)
+                                .collect(),
+                        ))
+                    }
+                    Ok(None) => Outcome::reply(RespValue::Array(Vec::new())),
+                    Err(outcome) => outcome,
+                }
+            }
+            "LTRIM" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let (Ok(start), Ok(stop)) = (parse_i64(&args[2]), parse_i64(&args[3])) else {
+                    return Outcome::error("ERR value is not an integer or out of range");
+                };
+                let Some(entry) = self.dbs[db_index].get_mut(&args[1]) else {
+                    return Outcome::ok();
+                };
+                let value = Arc::make_mut(&mut entry.value);
+                let Some(list) = value.as_list_mut() else {
+                    return wrong_type();
+                };
+                let range = normalize_range(list.len(), start, stop);
+                let trimmed: VecDeque<Vec<u8>> = match range {
+                    Some((start, stop)) => list.range(start..=stop).cloned().collect(),
+                    None => VecDeque::new(),
+                };
+                list.clear();
+                list.extend(trimmed);
+                let empty = list.is_empty();
+                if empty {
+                    self.dbs[db_index].remove(&args[1]);
+                }
+                Outcome::ok()
+            }
+            "LREM" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let Ok(count) = parse_i64(&args[2]) else {
+                    return Outcome::error("ERR value is not an integer or out of range");
+                };
+                let Some(entry) = self.dbs[db_index].get_mut(&args[1]) else {
+                    return Outcome::reply(RespValue::Integer(0));
+                };
+                let value = Arc::make_mut(&mut entry.value);
+                let Some(list) = value.as_list_mut() else {
+                    return wrong_type();
+                };
+                let mut removed = 0i64;
+                let mut kept = VecDeque::with_capacity(list.len());
+                if count >= 0 {
+                    for item in std::mem::take(list) {
+                        if item == args[3] && (count == 0 || removed < count) {
+                            removed += 1;
+                        } else {
+                            kept.push_back(item);
+                        }
+                    }
+                } else {
+                    let limit = count.unsigned_abs();
+                    let mut reversed = VecDeque::with_capacity(list.len());
+                    while let Some(item) = list.pop_back() {
+                        if item == args[3] && removed < limit as i64 {
+                            removed += 1;
+                        } else {
+                            reversed.push_back(item);
+                        }
+                    }
+                    while let Some(item) = reversed.pop_back() {
+                        kept.push_back(item);
+                    }
+                }
+                *list = kept;
+                let empty = list.is_empty();
+                if empty {
+                    self.dbs[db_index].remove(&args[1]);
+                }
+                Outcome::reply(RespValue::Integer(removed))
+            }
+            "LINSERT" => {
+                if args.len() != 5 {
+                    return wrong_args(args);
+                }
+                let before = if args[2].eq_ignore_ascii_case(b"BEFORE") {
+                    true
+                } else if args[2].eq_ignore_ascii_case(b"AFTER") {
+                    false
+                } else {
+                    return Outcome::error("ERR syntax error");
+                };
+                let Some(entry) = self.dbs[db_index].get_mut(&args[1]) else {
+                    return Outcome::reply(RespValue::Integer(0));
+                };
+                let value = Arc::make_mut(&mut entry.value);
+                let Some(list) = value.as_list_mut() else {
+                    return wrong_type();
+                };
+                let Some(position) = list.iter().position(|item| item == &args[3]) else {
+                    return Outcome::reply(RespValue::Integer(-1));
+                };
+                let index = if before { position } else { position + 1 };
+                list.insert(index, args[4].clone());
+                Outcome::reply(RespValue::Integer(list.len() as i64))
+            }
+            "LPOS" => self.cmd_lpos(args, db_index),
+            "RPOPLPUSH" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                match self.list_move(
+                    db_index,
+                    &args[1],
+                    &args[2],
+                    ListSide::Right,
+                    ListSide::Left,
+                ) {
+                    Ok(Some(value)) => {
+                        let mut outcome = Outcome::reply(RespValue::bulk(value));
+                        outcome.wake.push((db_index, args[2].clone()));
+                        outcome
+                    }
+                    Ok(None) => Outcome::reply(RespValue::null()),
+                    Err(outcome) => outcome,
+                }
+            }
+            "LMOVE" => {
+                if args.len() != 5 {
+                    return wrong_args(args);
+                }
+                let Some(from) = parse_side(&args[3]) else {
+                    return Outcome::error("ERR syntax error");
+                };
+                let Some(to) = parse_side(&args[4]) else {
+                    return Outcome::error("ERR syntax error");
+                };
+                match self.list_move(db_index, &args[1], &args[2], from, to) {
+                    Ok(Some(value)) => {
+                        let mut outcome = Outcome::reply(RespValue::bulk(value));
+                        outcome.wake.push((db_index, args[2].clone()));
+                        outcome
+                    }
+                    Ok(None) => Outcome::reply(RespValue::null()),
+                    Err(outcome) => outcome,
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn cmd_lpos(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let mut rank = 1i64;
+        let mut count: Option<i64> = None;
+        let mut maxlen = 0i64;
+        let mut index = 3;
+        while index < args.len() {
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            let Some(value) = args.get(index + 1) else {
+                return Outcome::error("ERR syntax error");
+            };
+            let Ok(parsed) = parse_i64(value) else {
+                return Outcome::error("ERR value is not an integer or out of range");
+            };
+            match option.as_str() {
+                "RANK" => {
+                    if parsed == 0 {
+                        return Outcome::error(
+                            "ERR RANK can't be zero: use 1 to start from the first match, 2 from the second, ...",
+                        );
+                    }
+                    rank = parsed;
+                    index += 2;
+                }
+                "COUNT" => {
+                    if parsed < 0 {
+                        return Outcome::error("ERR COUNT can't be negative");
+                    }
+                    count = Some(parsed);
+                    index += 2;
+                }
+                "MAXLEN" => {
+                    if parsed < 0 {
+                        return Outcome::error("ERR MAXLEN can't be negative");
+                    }
+                    maxlen = parsed;
+                    index += 2;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        let list = match self.get_list(db_index, &args[1]) {
+            Ok(Some(list)) => list,
+            Ok(None) => {
+                return if count.is_some() {
+                    Outcome::reply(RespValue::Array(Vec::new()))
+                } else {
+                    Outcome::reply(RespValue::null())
+                };
+            }
+            Err(outcome) => return outcome,
+        };
+        let needle = &args[2];
+        let mut matches = Vec::new();
+        let scan_limit = if maxlen == 0 {
+            list.len()
+        } else {
+            (maxlen as usize).min(list.len())
+        };
+        if rank > 0 {
+            let mut skipped = 0i64;
+            for (position, item) in list.iter().take(scan_limit).enumerate() {
+                if item != needle {
+                    continue;
+                }
+                skipped += 1;
+                if skipped < rank {
+                    continue;
+                }
+                matches.push(position as i64);
+                if count.is_none_or(|count| count > 0 && matches.len() >= count as usize) {
+                    break;
+                }
+            }
+        } else {
+            let mut skipped = 0i64;
+            for (position, item) in list.iter().enumerate().rev().take(scan_limit) {
+                if item != needle {
+                    continue;
+                }
+                skipped += 1;
+                if skipped < rank.unsigned_abs() as i64 {
+                    continue;
+                }
+                matches.push(position as i64);
+                if count.is_none_or(|count| count > 0 && matches.len() >= count as usize) {
+                    break;
+                }
+            }
+        }
+        if count.is_some() {
+            Outcome::reply(RespValue::Array(
+                matches.into_iter().map(RespValue::Integer).collect(),
+            ))
+        } else {
+            match matches.into_iter().next() {
+                Some(value) => Outcome::reply(RespValue::Integer(value)),
+                None => Outcome::reply(RespValue::null()),
+            }
+        }
+    }
+
+    fn cmd_bpop(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let timeout_ms = match parse_timeout(args.last().expect("timeout")) {
+            Ok(timeout) => timeout,
+            Err(outcome) => return outcome,
+        };
+        let side = if command == "BLPOP" {
+            ListSide::Left
+        } else {
+            ListSide::Right
+        };
+        let keys = &args[1..args.len() - 1];
+        for key in keys {
+            self.expire_if_needed(db_index, key);
+            match self.dbs[db_index].get(key) {
+                Some(entry) if entry.value.as_list().is_none() => return wrong_type(),
+                Some(entry) if !entry.value.as_list().is_some_and(VecDeque::is_empty) => {
+                    let value = self
+                        .list_pop_value(db_index, key, side)
+                        .expect("list is non-empty");
+                    return Outcome::reply(RespValue::Array(vec![
+                        RespValue::bulk(key.clone()),
+                        RespValue::bulk(value),
+                    ]));
+                }
+                _ => {}
+            }
+        }
+        Outcome::blocked(BlockRequest {
+            db: db_index,
+            keys: keys.to_vec(),
+            kind: BlockKind::Pop,
+            source_side: side,
+            destination: None,
+            destination_side: ListSide::Left,
+            timeout_ms,
+        })
+    }
+
+    fn cmd_brpoplpush(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 4 {
+            return wrong_args(args);
+        }
+        let timeout_ms = match parse_timeout(&args[3]) {
+            Ok(timeout) => timeout,
+            Err(outcome) => return outcome,
+        };
+        match self.list_move(
+            db_index,
+            &args[1],
+            &args[2],
+            ListSide::Right,
+            ListSide::Left,
+        ) {
+            Ok(Some(value)) => {
+                let mut outcome = Outcome::reply(RespValue::bulk(value));
+                outcome.wake.push((db_index, args[2].clone()));
+                outcome
+            }
+            Ok(None) => Outcome::blocked(BlockRequest {
+                db: db_index,
+                keys: vec![args[1].clone()],
+                kind: BlockKind::Move,
+                source_side: ListSide::Right,
+                destination: Some(args[2].clone()),
+                destination_side: ListSide::Left,
+                timeout_ms,
+            }),
+            Err(outcome) => outcome,
+        }
+    }
+
+    fn cmd_blmove(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 6 {
+            return wrong_args(args);
+        }
+        let Some(from) = parse_side(&args[3]) else {
+            return Outcome::error("ERR syntax error");
+        };
+        let Some(to) = parse_side(&args[4]) else {
+            return Outcome::error("ERR syntax error");
+        };
+        let timeout_ms = match parse_timeout(&args[5]) {
+            Ok(timeout) => timeout,
+            Err(outcome) => return outcome,
+        };
+        match self.list_move(db_index, &args[1], &args[2], from, to) {
+            Ok(Some(value)) => {
+                let mut outcome = Outcome::reply(RespValue::bulk(value));
+                outcome.wake.push((db_index, args[2].clone()));
+                outcome
+            }
+            Ok(None) => Outcome::blocked(BlockRequest {
+                db: db_index,
+                keys: vec![args[1].clone()],
+                kind: BlockKind::Move,
+                source_side: from,
+                destination: Some(args[2].clone()),
+                destination_side: to,
+                timeout_ms,
+            }),
+            Err(outcome) => outcome,
+        }
+    }
+
+    /// Serve a blocked client after data is available. Returns `None` if the
+    /// source is still empty, in which case the client stays blocked.
+    pub fn serve_blocked(&mut self, request: &BlockRequest) -> Option<RespValue> {
+        match request.kind {
+            BlockKind::Pop => {
+                for key in &request.keys {
+                    match self.dbs[request.db].get(key) {
+                        Some(entry)
+                            if entry.value.as_list().is_some_and(|list| !list.is_empty()) =>
+                        {
+                            let value = self
+                                .list_pop_value(request.db, key, request.source_side)
+                                .expect("list is non-empty");
+                            return Some(RespValue::Array(vec![
+                                RespValue::bulk(key.clone()),
+                                RespValue::bulk(value),
+                            ]));
+                        }
+                        Some(entry) if entry.value.as_list().is_none() => {}
+                        _ => {}
+                    }
+                }
+                None
+            }
+            BlockKind::Move => {
+                let destination = request.destination.as_ref()?;
+                match self.list_move(
+                    request.db,
+                    &request.keys[0],
+                    destination,
+                    request.source_side,
+                    request.destination_side,
+                ) {
+                    Ok(Some(value)) => Some(RespValue::bulk(value)),
+                    Ok(None) => None,
+                    Err(outcome) => Some(outcome.reply),
+                }
+            }
+        }
+    }
+
+    fn get_list(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+    ) -> Result<Option<VecDeque<Vec<u8>>>, Outcome> {
+        self.expire_if_needed(db_index, key);
+        match self.dbs[db_index].get(key) {
+            Some(entry) => match entry.value.as_list() {
+                Some(list) => Ok(Some(list.clone())),
+                None => Err(wrong_type()),
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn list_for_write(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+        mvcc: u64,
+    ) -> Result<&mut VecDeque<Vec<u8>>, Outcome> {
+        if !self.dbs[db_index].contains_key(key) {
+            self.dbs[db_index].insert(key, Value::List(VecDeque::new()), mvcc);
+        }
+        let Some(entry) = self.dbs[db_index].get_mut(key) else {
+            return Err(wrong_type());
+        };
+        entry.mvcc = mvcc;
+        let value = Arc::make_mut(&mut entry.value);
+        match value {
+            Value::List(list) => Ok(list),
+            _ => Err(wrong_type()),
+        }
+    }
+
+    fn list_pop_value(&mut self, db_index: usize, key: &[u8], side: ListSide) -> Option<Vec<u8>> {
+        let mvcc = self.clock.next(self.now_ms());
+        let empty;
+        let value;
+        {
+            let entry = self.dbs[db_index].get_mut(key)?;
+            entry.mvcc = mvcc;
+            let value_ref = Arc::make_mut(&mut entry.value);
+            let list = value_ref.as_list_mut()?;
+            value = match side {
+                ListSide::Left => list.pop_front(),
+                ListSide::Right => list.pop_back(),
+            };
+            empty = list.is_empty();
+        }
+        if empty {
+            self.dbs[db_index].remove(key);
+        }
+        value
+    }
+
+    fn list_move(
+        &mut self,
+        db_index: usize,
+        source: &[u8],
+        destination: &[u8],
+        from: ListSide,
+        to: ListSide,
+    ) -> Result<Option<Vec<u8>>, Outcome> {
+        self.expire_if_needed(db_index, source);
+        self.expire_if_needed(db_index, destination);
+        if source == destination {
+            let Some(entry) = self.dbs[db_index].get_mut(source) else {
+                return Ok(None);
+            };
+            let value_ref = Arc::make_mut(&mut entry.value);
+            let Some(list) = value_ref.as_list_mut() else {
+                return Err(wrong_type());
+            };
+            let value = match from {
+                ListSide::Left => list.pop_front(),
+                ListSide::Right => list.pop_back(),
+            };
+            if let Some(value) = &value {
+                match to {
+                    ListSide::Left => list.push_front(value.clone()),
+                    ListSide::Right => list.push_back(value.clone()),
+                }
+            }
+            return Ok(value);
+        }
+
+        match self.dbs[db_index].get(source) {
+            Some(entry) if entry.value.as_list().is_none() => return Err(wrong_type()),
+            None => return Ok(None),
+            _ => {}
+        }
+        if let Some(entry) = self.dbs[db_index].get(destination)
+            && entry.value.as_list().is_none()
+        {
+            return Err(wrong_type());
+        }
+        let Some(value) = self.list_pop_value(db_index, source, from) else {
+            return Ok(None);
+        };
+        let mvcc = self.clock.next(self.now_ms());
+        let list = self.list_for_write(db_index, destination, mvcc)?;
+        match to {
+            ListSide::Left => list.push_front(value.clone()),
+            ListSide::Right => list.push_back(value.clone()),
+        }
+        Ok(Some(value))
     }
 
     fn cmd_set_command(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
@@ -1205,6 +2018,7 @@ impl State {
         let Some(entry) = self.dbs[db_index].get_mut(key) else {
             return Err(wrong_type());
         };
+        entry.mvcc = mvcc;
         let value = Arc::make_mut(&mut entry.value);
         match value {
             Value::Set(set) => Ok(set),
@@ -1215,7 +2029,9 @@ impl State {
     fn remove_set_members(&mut self, db_index: usize, key: &[u8], members: &[Vec<u8>]) -> usize {
         let mut removed = 0;
         let mut empty = false;
+        let mvcc = self.clock.next(self.now_ms());
         if let Some(entry) = self.dbs[db_index].get_mut(key) {
+            entry.mvcc = mvcc;
             let value = Arc::make_mut(&mut entry.value);
             if let Value::Set(set) = value {
                 for member in members {
@@ -1278,6 +2094,159 @@ impl State {
                 "ERR Unknown subcommand or wrong number of arguments for '{}'. Try OBJECT HELP.",
                 String::from_utf8_lossy(&args[1])
             )),
+        }
+    }
+
+    fn cmd_rename(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 3 {
+            return wrong_args(args);
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        self.expire_if_needed(db_index, &args[2]);
+        let Some(entry) = self.dbs[db_index].get(&args[1]).cloned() else {
+            return Outcome::error("ERR no such key");
+        };
+        if args[1] == args[2] {
+            return if command == "RENAMENX" {
+                Outcome::reply(RespValue::Integer(0))
+            } else {
+                Outcome::ok()
+            };
+        }
+        let destination_exists = self.dbs[db_index].contains_key(&args[2]);
+        if command == "RENAMENX" && destination_exists {
+            return Outcome::reply(RespValue::Integer(0));
+        }
+        self.dbs[db_index].remove(&args[1]);
+        let mvcc = self.clock.next(self.now_ms());
+        let mut entry = entry;
+        entry.mvcc = mvcc;
+        self.dbs[db_index].insert_entry(args[2].clone(), entry);
+        let mut outcome = if command == "RENAMENX" {
+            Outcome::reply(RespValue::Integer(1))
+        } else {
+            Outcome::ok()
+        };
+        outcome.wake.push((db_index, args[2].clone()));
+        outcome
+    }
+
+    fn cmd_sort(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        let mut alpha = false;
+        let mut desc = false;
+        let mut store: Option<Vec<u8>> = None;
+        let mut offset = 0usize;
+        let mut count: Option<usize> = None;
+        let mut index = 2;
+        while index < args.len() {
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "ALPHA" => {
+                    alpha = true;
+                    index += 1;
+                }
+                "ASC" => {
+                    desc = false;
+                    index += 1;
+                }
+                "DESC" => {
+                    desc = true;
+                    index += 1;
+                }
+                "LIMIT" => {
+                    let Some(offset_arg) = args.get(index + 1) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    let Some(count_arg) = args.get(index + 2) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    let (Ok(parsed_offset), Ok(parsed_count)) =
+                        (parse_i64(offset_arg), parse_i64(count_arg))
+                    else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    if parsed_offset < 0 {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    offset = parsed_offset as usize;
+                    count = if parsed_count < 0 {
+                        None
+                    } else {
+                        Some(parsed_count as usize)
+                    };
+                    index += 3;
+                }
+                "STORE" => {
+                    let Some(destination) = args.get(index + 1) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    store = Some(destination.clone());
+                    index += 2;
+                }
+                "BY" | "GET" => {
+                    return Outcome::error("ERR syntax error");
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+
+        let mut values: Vec<Vec<u8>> = match self.dbs[db_index].get(&args[1]) {
+            Some(entry) => match entry.value.as_ref() {
+                Value::List(list) => list.iter().cloned().collect(),
+                Value::Set(set) => set.iter().cloned().collect(),
+                Value::ZSet(zset) => zset.scores.keys().cloned().collect(),
+                _ => return wrong_type(),
+            },
+            None => Vec::new(),
+        };
+
+        if alpha {
+            values.sort();
+        } else {
+            let mut scored = Vec::with_capacity(values.len());
+            for value in values {
+                let Ok(text) = std::str::from_utf8(&value) else {
+                    return Outcome::error("ERR One or more scores can't be converted into double");
+                };
+                let Ok(score) = text.parse::<f64>() else {
+                    return Outcome::error("ERR One or more scores can't be converted into double");
+                };
+                scored.push((score, value));
+            }
+            scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            values = scored.into_iter().map(|(_, value)| value).collect();
+        }
+        if desc {
+            values.reverse();
+        }
+        let values: Vec<Vec<u8>> = values
+            .into_iter()
+            .skip(offset)
+            .take(count.unwrap_or(usize::MAX))
+            .collect();
+
+        if let Some(destination) = store {
+            let mvcc = self.clock.next(self.now_ms());
+            let length = values.len() as i64;
+            if values.is_empty() {
+                self.dbs[db_index].remove(&destination);
+            } else {
+                self.dbs[db_index].insert(
+                    &destination,
+                    Value::List(values.into_iter().collect()),
+                    mvcc,
+                );
+            }
+            let mut outcome = Outcome::reply(RespValue::Integer(length));
+            outcome.wake.push((db_index, destination));
+            outcome
+        } else {
+            Outcome::reply(RespValue::Array(
+                values.into_iter().map(RespValue::bulk).collect(),
+            ))
         }
     }
 
@@ -1403,8 +2372,8 @@ impl State {
         if all || section == "CLIENTS" {
             let _ = write!(
                 out,
-                "# Clients\r\nconnected_clients:{}\r\ncluster_connections:0\r\nmaxclients:10000\r\nclient_recent_max_input_buffer:0\r\nclient_recent_max_output_buffer:0\r\nblocked_clients:0\r\ntracking_clients:0\r\npubsub_clients:0\r\nwatching_clients:0\r\nclients_in_timeout_table:0\r\ntotal_watched_keys:0\r\ntotal_blocking_keys:0\r\ntotal_blocking_keys_on_nokey:0\r\n\r\n",
-                self.connected_clients
+                "# Clients\r\nconnected_clients:{}\r\ncluster_connections:0\r\nmaxclients:10000\r\nclient_recent_max_input_buffer:0\r\nclient_recent_max_output_buffer:0\r\nblocked_clients:{}\r\ntracking_clients:0\r\npubsub_clients:0\r\nwatching_clients:0\r\nclients_in_timeout_table:0\r\ntotal_watched_keys:0\r\ntotal_blocking_keys:0\r\ntotal_blocking_keys_on_nokey:0\r\n\r\n",
+                self.connected_clients, self.blocked_clients
             );
         }
         if all || section == "MEMORY" {
@@ -1830,6 +2799,69 @@ fn fnv1a(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+fn normalize_index(len: usize, requested: i64) -> Option<usize> {
+    let len = len as i64;
+    let index = if requested < 0 {
+        len + requested
+    } else {
+        requested
+    };
+    if index < 0 || index >= len {
+        None
+    } else {
+        Some(index as usize)
+    }
+}
+
+fn normalize_range(len: usize, start: i64, stop: i64) -> Option<(usize, usize)> {
+    let len = len as i64;
+    let mut start = if start < 0 { len + start } else { start };
+    let mut stop = if stop < 0 { len + stop } else { stop };
+    if start < 0 {
+        start = 0;
+    }
+    if stop >= len {
+        stop = len - 1;
+    }
+    if start >= len || stop < 0 || start > stop {
+        return None;
+    }
+    Some((start as usize, stop as usize))
+}
+
+fn parse_side(value: &[u8]) -> Option<ListSide> {
+    if value.eq_ignore_ascii_case(b"LEFT") {
+        Some(ListSide::Left)
+    } else if value.eq_ignore_ascii_case(b"RIGHT") {
+        Some(ListSide::Right)
+    } else {
+        None
+    }
+}
+
+fn parse_timeout(value: &[u8]) -> Result<Option<u64>, Outcome> {
+    let Ok(text) = std::str::from_utf8(value) else {
+        return Err(Outcome::error("ERR timeout is not a float or out of range"));
+    };
+    let Ok(seconds) = text.parse::<f64>() else {
+        return Err(Outcome::error("ERR timeout is not a float or out of range"));
+    };
+    if !seconds.is_finite() {
+        return Err(Outcome::error("ERR timeout is not a float or out of range"));
+    }
+    if seconds < 0.0 {
+        return Err(Outcome::error("ERR timeout is negative"));
+    }
+    if seconds == 0.0 {
+        return Ok(None);
+    }
+    let milliseconds = (seconds * 1000.0).ceil();
+    if milliseconds > u64::MAX as f64 {
+        return Err(Outcome::error("ERR timeout is out of range"));
+    }
+    Ok(Some(milliseconds as u64))
 }
 
 fn wrong_type() -> Outcome {
@@ -2316,6 +3348,273 @@ mod tests {
         assert_eq!(
             run(&mut state, &mut client, &[b"SCARD", b"a"]),
             RespValue::Integer(1)
+        );
+    }
+
+    #[test]
+    fn list_commands() {
+        let mut state = state();
+        let mut client = new_client();
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"LPUSH", b"l", b"a", b"b", b"c", b"d"]
+            ),
+            RespValue::Integer(4)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"RPUSH", b"l", b"0", b"1", b"2"]),
+            RespValue::Integer(7)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LRANGE", b"l", b"0", b"-1"]),
+            RespValue::Array(
+                [b"d", b"c", b"b", b"a", b"0", b"1", b"2"]
+                    .into_iter()
+                    .map(|value| RespValue::bulk(value.to_vec()))
+                    .collect()
+            )
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LINDEX", b"l", b"-1"]),
+            RespValue::bulk(b"2".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LSET", b"l", b"0", b"z"]),
+            RespValue::ok()
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LINDEX", b"l", b"0"]),
+            RespValue::bulk(b"z".to_vec())
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"LINSERT", b"l", b"BEFORE", b"a", b"x"]
+            ),
+            RespValue::Integer(8)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LPOS", b"l", b"a"]),
+            RespValue::Integer(4)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LREM", b"l", b"0", b"a"]),
+            RespValue::Integer(1)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LTRIM", b"l", b"0", b"2"]),
+            RespValue::ok()
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LLEN", b"l"]),
+            RespValue::Integer(3)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LPOP", b"l", b"2"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"z".to_vec()),
+                RespValue::bulk(b"c".to_vec())
+            ])
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"RPOP", b"l"]),
+            RespValue::bulk(b"b".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"EXISTS", b"l"]),
+            RespValue::Integer(0)
+        );
+    }
+
+    #[test]
+    fn list_move_and_blocking() {
+        let mut state = state();
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"RPUSH", b"src", b"a", b"b"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"RPOPLPUSH", b"src", b"dst"]),
+            RespValue::bulk(b"b".to_vec())
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"LMOVE", b"src", b"dst", b"LEFT", b"RIGHT"]
+            ),
+            RespValue::bulk(b"a".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LRANGE", b"dst", b"0", b"-1"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"b".to_vec()),
+                RespValue::bulk(b"a".to_vec())
+            ])
+        );
+
+        let blocked = state.execute(
+            &Command::new(vec![b"BLPOP".to_vec(), b"waiting".to_vec(), b"1".to_vec()]),
+            &mut client,
+        );
+        let request = *blocked.block.expect("missing list should block");
+        // Still blocked because the list is empty.
+        assert!(state.serve_blocked(&request).is_none());
+        run(&mut state, &mut client, &[b"RPUSH", b"waiting", b"value"]);
+        assert_eq!(
+            state.serve_blocked(&request),
+            Some(RespValue::Array(vec![
+                RespValue::bulk(b"waiting".to_vec()),
+                RespValue::bulk(b"value".to_vec())
+            ]))
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"EXISTS", b"waiting"]),
+            RespValue::Integer(0)
+        );
+    }
+
+    #[test]
+    fn list_wrongtype() {
+        let mut state = state();
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"SET", b"s", b"value"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LPUSH", b"s", b"x"]),
+            RespValue::error("WRONGTYPE Operation against a key holding the wrong kind of value")
+        );
+        run(&mut state, &mut client, &[b"RPUSH", b"l", b"x"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"GET", b"l"]),
+            RespValue::error("WRONGTYPE Operation against a key holding the wrong kind of value")
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"OBJECT", b"ENCODING", b"l"]),
+            RespValue::bulk(b"quicklist".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"TYPE", b"l"]),
+            RespValue::simple("list")
+        );
+    }
+
+    #[test]
+    fn multi_exec_and_watch() {
+        let mut state = state();
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"MULTI"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SET", b"a", b"1"]),
+            RespValue::simple("QUEUED")
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"INCR", b"a"]),
+            RespValue::simple("QUEUED")
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"EXEC"]),
+            RespValue::Array(vec![RespValue::ok(), RespValue::Integer(2)])
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"GET", b"a"]),
+            RespValue::bulk(b"2".to_vec())
+        );
+
+        run(&mut state, &mut client, &[b"WATCH", b"a"]);
+        run(&mut state, &mut client, &[b"MULTI"]);
+        run(&mut state, &mut client, &[b"GET", b"a"]);
+        let mut other = new_client();
+        run(&mut state, &mut other, &[b"SET", b"a", b"changed"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"EXEC"]),
+            RespValue::NullArray
+        );
+
+        run(&mut state, &mut client, &[b"WATCH", b"a"]);
+        run(&mut state, &mut client, &[b"MULTI"]);
+        run(&mut state, &mut client, &[b"GET", b"a"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"EXEC"]),
+            RespValue::Array(vec![RespValue::bulk(b"changed".to_vec())])
+        );
+    }
+
+    #[test]
+    fn rename_and_sort() {
+        let mut state = state();
+        let mut client = new_client();
+        run(
+            &mut state,
+            &mut client,
+            &[b"LPUSH", b"bob", b"abc", b"def", b"hij"],
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"RENAME", b"bob", b"foo"]),
+            RespValue::ok()
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"EXISTS", b"bob"]),
+            RespValue::Integer(0)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LRANGE", b"foo", b"0", b"-1"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"hij".to_vec()),
+                RespValue::bulk(b"def".to_vec()),
+                RespValue::bulk(b"abc".to_vec())
+            ])
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"RENAME", b"missing", b"foo"]),
+            RespValue::error("ERR no such key")
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"RPUSH", b"notfoo", b"hello", b"hola", b"aguacate"]
+            ),
+            RespValue::Integer(3)
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"SORT", b"notfoo", b"ALPHA", b"STORE", b"foo"]
+            ),
+            RespValue::Integer(3)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"LRANGE", b"foo", b"0", b"-1"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"aguacate".to_vec()),
+                RespValue::bulk(b"hello".to_vec()),
+                RespValue::bulk(b"hola".to_vec())
+            ])
+        );
+    }
+
+    #[test]
+    fn lpos_maxlen_from_tail() {
+        let mut state = state();
+        let mut client = new_client();
+        run(
+            &mut state,
+            &mut client,
+            &[
+                b"RPUSH", b"mylist", b"a", b"b", b"c", b"d", b"e", b"c", b"c", b"f",
+            ],
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[
+                    b"LPOS", b"mylist", b"c", b"COUNT", b"0", b"MAXLEN", b"3", b"RANK", b"-1"
+                ]
+            ),
+            RespValue::Array(vec![RespValue::Integer(6), RespValue::Integer(5)])
         );
     }
 

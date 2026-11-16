@@ -2,15 +2,14 @@
 
 ## Bootstrap results
 
-The adapted harness runs KeyDB's `unit/protocol.tcl` (22 tests). rekeydb now
-passes 21 of 22:
+The adapted harness runs KeyDB's `unit/protocol.tcl` (22 tests). rekeydb
+passes all 22, including the blocking `BLPOP` pipelining regression.
 
-- protocol parsing, error strings, inline quoting, desync tests,
-  raw-response tests, RESP3 attributes, big numbers, booleans, and the RESP2
-  attribute fallback all pass;
-- the final regression test needs lists and blocking `BLPOP`; it moves to P2.
+The list suite (`unit/type/list.tcl`) reaches 80 passing tests before it needs
+`DEBUG RELOAD` (RDB support). Lists, blocking pops/moves, `MULTI`/`EXEC`,
+basic `WATCH`, `RENAME`, and `SORT ... STORE` are implemented.
 
-The reference binary passes all 22.
+The reference binary passes all 22 protocol tests.
 
 ## Running
 
@@ -37,7 +36,9 @@ it has been built.
 - 27 string/keyspace commands;
 - 14 error/edge-case replies;
 - 29 set commands including encodings, wrong-type errors, stores, and
-  single-member random operations.
+  single-member random operations;
+- 32 list/transaction commands including blocking wakeups, moves, `MULTI`,
+  `EXEC`, `RENAME`, and `SORT ... STORE`.
 
 ## Oracle build
 
@@ -47,6 +48,6 @@ and Ubuntu install `uuid-dev`, `libssl-dev`, and `zlib1g-dev`.
 
 ## Next
 
-- Lists, hashes, and sorted sets with Redis 6.2 encodings.
-- Blocking command framework (the final protocol regression).
-- RDB v9 load/save and `DEBUG DIGEST`.
+- RDB v9 load/save and `DEBUG RELOAD`/`DEBUG DIGEST`.
+- Hashes and sorted sets with Redis 6.2 encodings.
+- Remaining list-suite gaps after reload support.

@@ -161,6 +161,20 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn as_list(&self) -> Option<&VecDeque<Vec<u8>>> {
+        match self {
+            Self::List(list) => Some(list),
+            _ => None,
+        }
+    }
+
+    pub fn as_list_mut(&mut self) -> Option<&mut VecDeque<Vec<u8>>> {
+        match self {
+            Self::List(list) => Some(list),
+            _ => None,
+        }
+    }
 }
 
 fn string_encoding(bytes: &[u8]) -> &'static str {
