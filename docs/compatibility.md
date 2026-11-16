@@ -6,8 +6,8 @@ every row eventually lands.
 | Area | P0 | M1 | Later |
 |---|---|---|---|
 | RESP2 | yes | — | — |
-| RESP3 | codec + `HELLO` | push/tracking | attributes |
-| Commands | strings/keyspace subset | 5 data types | remaining 236 |
+| RESP3 | codec, attributes, `HELLO` | push/tracking | — |
+| Commands | strings + sets + keyspace | lists, hashes, zsets | remaining 236 |
 | Expiry | primary TTL | subkey expiry | active cycle parity |
 | MVCC | snapshot core + `DEBUG MVCC` | save/reload readers | async end |
 | Persistence | — | RDB load/save, DUMP | AOF |

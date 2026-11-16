@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use rekeydb_core::{Database, Entry, ExpireEntry, MvccClock, Snapshot};
+use rekeydb_core::{Database, EncodingLimits, Entry, ExpireEntry, MvccClock, Snapshot, Value};
 use rekeydb_protocol::{Command, RespValue, RespVersion};
 
 use crate::config::Config;
@@ -68,14 +68,15 @@ pub struct Stats {
 
 pub struct State {
     pub config: Config,
-    dbs: Vec<Database<Vec<u8>>>,
+    dbs: Vec<Database<Value>>,
     clock: MvccClock,
     stats: Stats,
     start: Instant,
     start_unix: i64,
     now_override: Option<i64>,
     config_values: BTreeMap<String, String>,
-    debug_snapshots: Vec<Option<Arc<Snapshot<Vec<u8>>>>>,
+    debug_snapshots: Vec<Option<Arc<Snapshot<Value>>>>,
+    encoding_limits: EncodingLimits,
     pub connected_clients: usize,
 }
 
@@ -126,6 +127,7 @@ impl State {
             now_override: None,
             config_values,
             debug_snapshots: (0..databases).map(|_| None).collect(),
+            encoding_limits: EncodingLimits::default(),
             connected_clients: 0,
         };
         state.refresh_config_values();
@@ -199,11 +201,11 @@ impl State {
         &mut self.stats
     }
 
-    pub fn db(&self, index: usize) -> &Database<Vec<u8>> {
+    pub fn db(&self, index: usize) -> &Database<Value> {
         &self.dbs[index]
     }
 
-    pub fn db_mut(&mut self, index: usize) -> &mut Database<Vec<u8>> {
+    pub fn db_mut(&mut self, index: usize) -> &mut Database<Value> {
         &mut self.dbs[index]
     }
 
@@ -217,7 +219,7 @@ impl State {
         }
     }
 
-    fn existing(&mut self, db_index: usize, key: &[u8]) -> Option<Entry<Vec<u8>>> {
+    fn existing(&mut self, db_index: usize, key: &[u8]) -> Option<Entry<Value>> {
         self.expire_if_needed(db_index, key);
         self.dbs[db_index].get(key).cloned()
     }
@@ -271,10 +273,13 @@ impl State {
                     return wrong_args(args);
                 }
                 match self.existing(client.db, &args[1]) {
-                    Some(entry) => {
-                        self.stats.keyspace_hits += 1;
-                        Outcome::reply(RespValue::bulk(entry.value.as_slice().to_vec()))
-                    }
+                    Some(entry) => match entry.value.as_string() {
+                        Some(bytes) => {
+                            self.stats.keyspace_hits += 1;
+                            Outcome::reply(RespValue::bulk(bytes.clone()))
+                        }
+                        None => wrong_type(),
+                    },
                     None => {
                         self.stats.keyspace_misses += 1;
                         Outcome::reply(RespValue::null())
@@ -285,22 +290,32 @@ impl State {
                 if args.len() != 2 {
                     return wrong_args(args);
                 }
-                self.expire_if_needed(client.db, &args[1]);
-                let removed = self.dbs[client.db].remove(&args[1]);
-                match removed {
-                    Some(value) => Outcome::reply(RespValue::bulk(value.as_slice().to_vec())),
-                    None => Outcome::reply(RespValue::null()),
-                }
+                let Some(entry) = self.existing(client.db, &args[1]) else {
+                    return Outcome::reply(RespValue::null());
+                };
+                let Some(bytes) = entry.value.as_string() else {
+                    return wrong_type();
+                };
+                let bytes = bytes.clone();
+                self.dbs[client.db].remove(&args[1]);
+                Outcome::reply(RespValue::bulk(bytes))
             }
             "GETSET" => {
                 if args.len() != 3 {
                     return wrong_args(args);
                 }
                 let previous = self.existing(client.db, &args[1]);
+                if let Some(entry) = &previous
+                    && entry.value.as_string().is_none()
+                {
+                    return wrong_type();
+                }
                 let mvcc = self.clock.next(self.now_ms());
-                self.dbs[client.db].insert(&args[1], args[2].clone(), mvcc);
+                self.dbs[client.db].insert(&args[1], Value::String(args[2].clone()), mvcc);
                 match previous {
-                    Some(entry) => Outcome::reply(RespValue::bulk(entry.value.as_slice().to_vec())),
+                    Some(entry) => Outcome::reply(RespValue::bulk(
+                        entry.value.as_string().expect("checked string").clone(),
+                    )),
                     None => Outcome::reply(RespValue::null()),
                 }
             }
@@ -335,10 +350,9 @@ impl State {
                     return wrong_args(args);
                 }
                 self.expire_if_needed(client.db, &args[1]);
-                if self.dbs[client.db].contains_key(&args[1]) {
-                    Outcome::reply(RespValue::simple("string"))
-                } else {
-                    Outcome::reply(RespValue::simple("none"))
+                match self.dbs[client.db].get(&args[1]) {
+                    Some(entry) => Outcome::reply(RespValue::simple(entry.value.type_name())),
+                    None => Outcome::reply(RespValue::simple("none")),
                 }
             }
             "DBSIZE" => {
@@ -396,10 +410,19 @@ impl State {
                     return wrong_args(args);
                 }
                 match self.existing(client.db, &args[1]) {
-                    Some(entry) => Outcome::reply(RespValue::Integer(entry.value.len() as i64)),
+                    Some(entry) => match entry.value.as_string() {
+                        Some(bytes) => Outcome::reply(RespValue::Integer(bytes.len() as i64)),
+                        None => wrong_type(),
+                    },
                     None => Outcome::reply(RespValue::Integer(0)),
                 }
             }
+            "SADD" | "SREM" | "SCARD" | "SISMEMBER" | "SMISMEMBER" | "SMEMBERS" | "SPOP"
+            | "SRANDMEMBER" | "SMOVE" | "SINTER" | "SUNION" | "SDIFF" | "SINTERSTORE"
+            | "SUNIONSTORE" | "SDIFFSTORE" | "SSCAN" => {
+                self.cmd_set_command(&name, args, client.db)
+            }
+            "OBJECT" => self.cmd_object(args, client.db),
             "INCR" | "DECR" | "INCRBY" | "DECRBY" => self.cmd_incr(&name, args, client.db),
             "MSET" => {
                 if args.len() < 3 || args.len().is_multiple_of(2) {
@@ -407,7 +430,7 @@ impl State {
                 }
                 let mvcc = self.clock.next(self.now_ms());
                 for pair in args[1..].chunks(2) {
-                    self.dbs[client.db].insert(&pair[0], pair[1].clone(), mvcc);
+                    self.dbs[client.db].insert(&pair[0], Value::String(pair[1].clone()), mvcc);
                 }
                 Outcome::ok()
             }
@@ -418,9 +441,10 @@ impl State {
                 let mut values = Vec::with_capacity(args.len() - 1);
                 for key in &args[1..] {
                     match self.existing(client.db, key) {
-                        Some(entry) => {
-                            values.push(RespValue::bulk(entry.value.as_slice().to_vec()))
-                        }
+                        Some(entry) => match entry.value.as_string() {
+                            Some(bytes) => values.push(RespValue::bulk(bytes.clone())),
+                            None => values.push(RespValue::null()),
+                        },
                         None => values.push(RespValue::null()),
                     }
                 }
@@ -552,10 +576,13 @@ impl State {
             return Outcome::reply(RespValue::null());
         }
         let old_reply = if get {
-            previous
-                .as_ref()
-                .map(|entry| RespValue::bulk(entry.value.as_slice().to_vec()))
-                .unwrap_or_else(RespValue::null)
+            match previous.as_ref() {
+                Some(entry) => match entry.value.as_string() {
+                    Some(bytes) => RespValue::bulk(bytes.clone()),
+                    None => return wrong_type(),
+                },
+                None => RespValue::null(),
+            }
         } else {
             RespValue::ok()
         };
@@ -574,7 +601,7 @@ impl State {
         let mvcc = self.clock.next(now);
         self.dbs[client.db].insert_entry(
             args[1].clone(),
-            Entry::with_expire(Arc::new(args[2].clone()), expire, mvcc),
+            Entry::with_expire(Arc::new(Value::String(args[2].clone())), expire, mvcc),
         );
         Outcome::reply(old_reply)
     }
@@ -599,6 +626,7 @@ impl State {
         };
         let mut count = 10usize;
         let mut pattern: Option<&[u8]> = None;
+        let mut type_filter: Option<Vec<u8>> = None;
         let mut index = 2;
         while index < args.len() {
             let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
@@ -621,14 +649,10 @@ impl State {
                     index += 2;
                 }
                 "TYPE" => {
-                    // The P0 server only has strings. Accept the option and
-                    // filter accordingly.
                     let Some(value) = args.get(index + 1) else {
                         return Outcome::error("ERR syntax error");
                     };
-                    if !value.eq_ignore_ascii_case(b"string") {
-                        count = 0;
-                    }
+                    type_filter = Some(value.to_ascii_lowercase());
                     index += 2;
                 }
                 _ => return Outcome::error("ERR syntax error"),
@@ -639,7 +663,15 @@ impl State {
             .collect_visible()
             .into_iter()
             .filter(|(key, entry)| {
-                !entry.is_expired(now) && pattern.is_none_or(|pattern| glob_match(pattern, key))
+                !entry.is_expired(now)
+                    && pattern.is_none_or(|pattern| glob_match(pattern, key))
+                    && type_filter.as_ref().is_none_or(|wanted| {
+                        entry
+                            .value
+                            .type_name()
+                            .as_bytes()
+                            .eq_ignore_ascii_case(wanted)
+                    })
             })
             .map(|(key, _)| key)
             .collect();
@@ -717,10 +749,13 @@ impl State {
         let mvcc = self.clock.next(self.now_ms());
         if let Some(entry) = self.dbs[db_index].get_mut(&args[1]) {
             let value = Arc::make_mut(&mut entry.value);
-            value.extend_from_slice(&args[2]);
-            return Outcome::reply(RespValue::Integer(value.len() as i64));
+            let Some(bytes) = value.as_string_mut() else {
+                return wrong_type();
+            };
+            bytes.extend_from_slice(&args[2]);
+            return Outcome::reply(RespValue::Integer(bytes.len() as i64));
         }
-        let value = args[2].clone();
+        let value = Value::String(args[2].clone());
         let length = value.len() as i64;
         self.dbs[db_index].insert(&args[1], value, mvcc);
         Outcome::reply(RespValue::Integer(length))
@@ -762,11 +797,14 @@ impl State {
         };
         let existing = self.existing(db_index, key);
         let (current, expire) = match existing {
-            Some(entry) => match parse_i64(&entry.value) {
-                Ok(value) => (value, entry.expire),
-                Err(_) => {
-                    return Outcome::error("ERR value is not an integer or out of range");
-                }
+            Some(entry) => match entry.value.as_string() {
+                Some(bytes) => match parse_i64(bytes) {
+                    Ok(value) => (value, entry.expire),
+                    Err(_) => {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    }
+                },
+                None => return wrong_type(),
             },
             None => (0, ExpireEntry::new()),
         };
@@ -776,7 +814,11 @@ impl State {
         let mvcc = self.clock.next(self.now_ms());
         self.dbs[db_index].insert_entry(
             key.to_vec(),
-            Entry::with_expire(Arc::new(value.to_string().into_bytes()), expire, mvcc),
+            Entry::with_expire(
+                Arc::new(Value::String(value.to_string().into_bytes())),
+                expire,
+                mvcc,
+            ),
         );
         Outcome::reply(RespValue::Integer(value))
     }
@@ -791,6 +833,451 @@ impl State {
             .collect();
         for key in expired {
             self.dbs[db_index].remove(&key);
+        }
+    }
+
+    fn cmd_set_command(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        match command {
+            "SADD" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                let mvcc = self.clock.next(self.now_ms());
+                let set = match self.set_for_write(db_index, &args[1], mvcc) {
+                    Ok(set) => set,
+                    Err(outcome) => return outcome,
+                };
+                let mut added = 0;
+                for member in &args[2..] {
+                    if set.insert(member.clone()) {
+                        added += 1;
+                    }
+                }
+                Outcome::reply(RespValue::Integer(added))
+            }
+            "SREM" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                match self.get_set(db_index, &args[1]) {
+                    Ok(Some(_)) => Outcome::reply(RespValue::Integer(self.remove_set_members(
+                        db_index,
+                        &args[1],
+                        &args[2..],
+                    ) as i64)),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "SCARD" => {
+                if args.len() != 2 {
+                    return wrong_args(args);
+                }
+                match self.get_set(db_index, &args[1]) {
+                    Ok(Some(set)) => Outcome::reply(RespValue::Integer(set.len() as i64)),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "SISMEMBER" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                match self.get_set(db_index, &args[1]) {
+                    Ok(Some(set)) => {
+                        Outcome::reply(RespValue::Integer(i64::from(set.contains(&args[2]))))
+                    }
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "SMISMEMBER" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                match self.get_set(db_index, &args[1]) {
+                    Ok(Some(set)) => {
+                        let values = args[2..]
+                            .iter()
+                            .map(|member| RespValue::Integer(i64::from(set.contains(member))))
+                            .collect();
+                        Outcome::reply(RespValue::Array(values))
+                    }
+                    Ok(None) => Outcome::reply(RespValue::Array(
+                        args[2..].iter().map(|_| RespValue::Integer(0)).collect(),
+                    )),
+                    Err(outcome) => outcome,
+                }
+            }
+            "SMEMBERS" => {
+                if args.len() != 2 {
+                    return wrong_args(args);
+                }
+                match self.get_set(db_index, &args[1]) {
+                    Ok(Some(set)) => {
+                        let mut members: Vec<Vec<u8>> = set.into_iter().collect();
+                        members.sort();
+                        Outcome::reply(RespValue::Array(
+                            members.into_iter().map(RespValue::bulk).collect(),
+                        ))
+                    }
+                    Ok(None) => Outcome::reply(RespValue::Array(Vec::new())),
+                    Err(outcome) => outcome,
+                }
+            }
+            "SRANDMEMBER" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return wrong_args(args);
+                }
+                let count = if args.len() == 3 {
+                    match parse_i64(&args[2]) {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return Outcome::error("ERR value is not an integer or out of range");
+                        }
+                    }
+                } else {
+                    None
+                };
+                let set = match self.get_set(db_index, &args[1]) {
+                    Ok(Some(set)) => set,
+                    Ok(None) => {
+                        return if count.is_none() {
+                            Outcome::reply(RespValue::NullArray)
+                        } else {
+                            Outcome::reply(RespValue::Array(Vec::new()))
+                        };
+                    }
+                    Err(outcome) => return outcome,
+                };
+                let members: Vec<Vec<u8>> = set.into_iter().collect();
+                if members.is_empty() {
+                    return if count.is_none() {
+                        Outcome::reply(RespValue::NullArray)
+                    } else {
+                        Outcome::reply(RespValue::Array(Vec::new()))
+                    };
+                }
+                let seed = self.now_ms().unsigned_abs() ^ fnv1a(&args[1]);
+                let Some(count) = count else {
+                    let index = (seed as usize) % members.len();
+                    return Outcome::reply(RespValue::bulk(members[index].clone()));
+                };
+                if count == 0 {
+                    return Outcome::reply(RespValue::Array(Vec::new()));
+                }
+                let take = count.unsigned_abs() as usize;
+                let unique = count > 0;
+                let mut selected = Vec::new();
+                if unique {
+                    let take = take.min(members.len());
+                    // A deterministic walk is enough for the bootstrap; real
+                    // random sampling lands with the randomized command work.
+                    let start = (seed as usize) % members.len();
+                    for offset in 0..take {
+                        selected.push(members[(start + offset) % members.len()].clone());
+                    }
+                } else {
+                    for offset in 0..take {
+                        selected.push(members[(seed as usize + offset) % members.len()].clone());
+                    }
+                }
+                Outcome::reply(RespValue::Array(
+                    selected.into_iter().map(RespValue::bulk).collect(),
+                ))
+            }
+            "SPOP" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return wrong_args(args);
+                }
+                let count = if args.len() == 3 {
+                    match parse_i64(&args[2]) {
+                        Ok(value) if value >= 0 => Some(value as usize),
+                        _ => {
+                            return Outcome::error("ERR value is out of range, must be positive");
+                        }
+                    }
+                } else {
+                    None
+                };
+                let set = match self.get_set(db_index, &args[1]) {
+                    Ok(Some(set)) => set,
+                    Ok(None) => {
+                        return if count.is_none() {
+                            Outcome::reply(RespValue::null())
+                        } else {
+                            Outcome::reply(RespValue::Array(Vec::new()))
+                        };
+                    }
+                    Err(outcome) => return outcome,
+                };
+                let mut members: Vec<Vec<u8>> = set.into_iter().collect();
+                members.sort();
+                let take = count.unwrap_or(1).min(members.len());
+                let selected: Vec<Vec<u8>> = members.drain(..take).collect();
+                if !selected.is_empty() {
+                    self.remove_set_members(db_index, &args[1], &selected);
+                }
+                if count.is_some() {
+                    Outcome::reply(RespValue::Array(
+                        selected.into_iter().map(RespValue::bulk).collect(),
+                    ))
+                } else {
+                    match selected.into_iter().next() {
+                        Some(member) => Outcome::reply(RespValue::bulk(member)),
+                        None => Outcome::reply(RespValue::null()),
+                    }
+                }
+            }
+            "SMOVE" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let source = match self.get_set(db_index, &args[1]) {
+                    Ok(Some(set)) => set,
+                    Ok(None) => return Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => return outcome,
+                };
+                if !source.contains(&args[3]) {
+                    return Outcome::reply(RespValue::Integer(0));
+                }
+                if args[1] == args[2] {
+                    return Outcome::reply(RespValue::Integer(1));
+                }
+                if let Some(entry) = self.existing(db_index, &args[2])
+                    && entry.value.as_set().is_none()
+                {
+                    return wrong_type();
+                }
+                self.remove_set_members(db_index, &args[1], std::slice::from_ref(&args[3]));
+                let mvcc = self.clock.next(self.now_ms());
+                if let Ok(destination) = self.set_for_write(db_index, &args[2], mvcc) {
+                    destination.insert(args[3].clone());
+                }
+                Outcome::reply(RespValue::Integer(1))
+            }
+            "SINTER" | "SUNION" | "SDIFF" | "SINTERSTORE" | "SUNIONSTORE" | "SDIFFSTORE" => {
+                self.cmd_setop(command, args, db_index)
+            }
+            "SSCAN" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                let Ok(cursor) = parse_usize(&args[2]) else {
+                    return Outcome::error("ERR invalid cursor");
+                };
+                let mut count = 10usize;
+                let mut pattern: Option<&[u8]> = None;
+                let mut index = 3;
+                while index < args.len() {
+                    let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+                    match option.as_str() {
+                        "MATCH" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Outcome::error("ERR syntax error");
+                            };
+                            pattern = Some(value);
+                            index += 2;
+                        }
+                        "COUNT" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Outcome::error("ERR syntax error");
+                            };
+                            let Ok(value) = parse_usize(value) else {
+                                return Outcome::error(
+                                    "ERR value is not an integer or out of range",
+                                );
+                            };
+                            count = value.max(1);
+                            index += 2;
+                        }
+                        _ => return Outcome::error("ERR syntax error"),
+                    }
+                }
+                let set = match self.get_set(db_index, &args[1]) {
+                    Ok(Some(set)) => set,
+                    Ok(None) => {
+                        return Outcome::reply(RespValue::Array(vec![
+                            RespValue::bulk(b"0".to_vec()),
+                            RespValue::Array(Vec::new()),
+                        ]));
+                    }
+                    Err(outcome) => return outcome,
+                };
+                let mut members: Vec<Vec<u8>> = set
+                    .into_iter()
+                    .filter(|member| pattern.is_none_or(|pattern| glob_match(pattern, member)))
+                    .collect();
+                members.sort();
+                let start = cursor.min(members.len());
+                let end = start.saturating_add(count).min(members.len());
+                let next = if end >= members.len() { 0 } else { end };
+                let batch = members[start..end]
+                    .iter()
+                    .cloned()
+                    .map(RespValue::bulk)
+                    .collect();
+                Outcome::reply(RespValue::Array(vec![
+                    RespValue::bulk(next.to_string().into_bytes()),
+                    RespValue::Array(batch),
+                ]))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn cmd_setop(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        let store = command.ends_with("STORE");
+        let first_key = if store { 2 } else { 1 };
+        if args.len() <= first_key {
+            return wrong_args(args);
+        }
+        let operation = command.trim_end_matches("STORE");
+        let mut sets = Vec::new();
+        for key in &args[first_key..] {
+            match self.get_set(db_index, key) {
+                Ok(Some(set)) => sets.push(set),
+                Ok(None) => sets.push(HashSet::new()),
+                Err(outcome) => return outcome,
+            }
+        }
+        let mut result = sets.first().cloned().unwrap_or_default();
+        match operation {
+            "SINTER" => {
+                for set in &sets[1..] {
+                    result.retain(|member| set.contains(member));
+                }
+            }
+            "SUNION" => {
+                for set in &sets[1..] {
+                    result.extend(set.iter().cloned());
+                }
+            }
+            "SDIFF" => {
+                for set in &sets[1..] {
+                    result.retain(|member| !set.contains(member));
+                }
+            }
+            _ => unreachable!(),
+        }
+        if store {
+            let mvcc = self.clock.next(self.now_ms());
+            let cardinality = result.len() as i64;
+            if result.is_empty() {
+                self.dbs[db_index].remove(&args[1]);
+            } else {
+                self.dbs[db_index].insert(&args[1], Value::Set(result), mvcc);
+            }
+            Outcome::reply(RespValue::Integer(cardinality))
+        } else {
+            let mut members: Vec<Vec<u8>> = result.into_iter().collect();
+            members.sort();
+            Outcome::reply(RespValue::Array(
+                members.into_iter().map(RespValue::bulk).collect(),
+            ))
+        }
+    }
+
+    fn get_set(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+    ) -> Result<Option<HashSet<Vec<u8>>>, Outcome> {
+        self.expire_if_needed(db_index, key);
+        match self.dbs[db_index].get(key) {
+            Some(entry) => match entry.value.as_set() {
+                Some(set) => Ok(Some(set.clone())),
+                None => Err(wrong_type()),
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn set_for_write(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+        mvcc: u64,
+    ) -> Result<&mut HashSet<Vec<u8>>, Outcome> {
+        if !self.dbs[db_index].contains_key(key) {
+            self.dbs[db_index].insert(key, Value::Set(HashSet::new()), mvcc);
+        }
+        let Some(entry) = self.dbs[db_index].get_mut(key) else {
+            return Err(wrong_type());
+        };
+        let value = Arc::make_mut(&mut entry.value);
+        match value {
+            Value::Set(set) => Ok(set),
+            _ => Err(wrong_type()),
+        }
+    }
+
+    fn remove_set_members(&mut self, db_index: usize, key: &[u8], members: &[Vec<u8>]) -> usize {
+        let mut removed = 0;
+        let mut empty = false;
+        if let Some(entry) = self.dbs[db_index].get_mut(key) {
+            let value = Arc::make_mut(&mut entry.value);
+            if let Value::Set(set) = value {
+                for member in members {
+                    if set.remove(member) {
+                        removed += 1;
+                    }
+                }
+                empty = set.is_empty();
+            }
+        }
+        if empty {
+            self.dbs[db_index].remove(key);
+        }
+        removed
+    }
+
+    fn cmd_object(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        let sub = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+        match sub.as_str() {
+            "ENCODING" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                self.expire_if_needed(db_index, &args[2]);
+                match self.dbs[db_index].get(&args[2]) {
+                    Some(entry) => Outcome::reply(RespValue::bulk(
+                        entry
+                            .value
+                            .encoding(self.encoding_limits)
+                            .as_bytes()
+                            .to_vec(),
+                    )),
+                    None => Outcome::error("ERR no such key"),
+                }
+            }
+            "REFCOUNT" | "IDLETIME" | "FREQ" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                self.expire_if_needed(db_index, &args[2]);
+                if self.dbs[db_index].contains_key(&args[2]) {
+                    Outcome::reply(RespValue::Integer(if sub == "REFCOUNT" { 1 } else { 0 }))
+                } else {
+                    Outcome::error("ERR no such key")
+                }
+            }
+            "HELP" => Outcome::reply(RespValue::Array(vec![
+                RespValue::bulk(
+                    b"OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:".to_vec(),
+                ),
+                RespValue::bulk(b"ENCODING <key>".to_vec()),
+                RespValue::bulk(b"FREQ <key>".to_vec()),
+                RespValue::bulk(b"IDLETIME <key>".to_vec()),
+                RespValue::bulk(b"REFCOUNT <key>".to_vec()),
+            ])),
+            _ => Outcome::error(format!(
+                "ERR Unknown subcommand or wrong number of arguments for '{}'. Try OBJECT HELP.",
+                String::from_utf8_lossy(&args[1])
+            )),
         }
     }
 
@@ -838,6 +1325,26 @@ impl State {
                         && value.parse::<u64>().is_err()
                     {
                         return Outcome::error("ERR Invalid argument");
+                    }
+                    if let Ok(parsed) = value.parse::<usize>() {
+                        match key.as_str() {
+                            "set-max-intset-entries" => {
+                                self.encoding_limits.set_max_intset_entries = parsed;
+                            }
+                            "hash-max-ziplist-entries" => {
+                                self.encoding_limits.hash_max_ziplist_entries = parsed;
+                            }
+                            "hash-max-ziplist-value" => {
+                                self.encoding_limits.hash_max_ziplist_value = parsed;
+                            }
+                            "zset-max-ziplist-entries" => {
+                                self.encoding_limits.zset_max_ziplist_entries = parsed;
+                            }
+                            "zset-max-ziplist-value" => {
+                                self.encoding_limits.zset_max_ziplist_value = parsed;
+                            }
+                            _ => {}
+                        }
                     }
                     self.config_values.insert(key, value);
                 }
@@ -974,7 +1481,7 @@ impl State {
         self.dbs
             .iter()
             .flat_map(|db| db.collect_visible())
-            .map(|(key, entry)| key.len() + entry.value.len() + 64)
+            .map(|(key, entry)| key.len() + entry.value.memory_usage() + 64)
             .sum()
     }
 
@@ -1114,7 +1621,7 @@ impl State {
                 let Some(entry) = self.dbs[client.db].get(&args[2]) else {
                     return Outcome::error("ERR no such key");
                 };
-                let encoding = debug_encoding(&entry.value);
+                let encoding = entry.value.encoding(self.encoding_limits);
                 let address = fnv1a(&args[2]);
                 let text = format!(
                     "Value at:0x{address:x} refcount:1 encoding:{encoding} serializedlength:{} lru:0 lru_seconds_idle:0",
@@ -1133,6 +1640,61 @@ impl State {
                     std::thread::sleep(std::time::Duration::from_secs_f64(seconds.min(60.0)));
                 }
                 Outcome::ok()
+            }
+            "PROTOCOL" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                let kind = String::from_utf8_lossy(&args[2]).to_ascii_lowercase();
+                let reply = match kind.as_str() {
+                    "attrib" => RespValue::Attribute {
+                        pairs: vec![(
+                            RespValue::bulk(b"key-popularity".to_vec()),
+                            RespValue::Array(vec![
+                                RespValue::bulk(b"key:123".to_vec()),
+                                RespValue::Integer(90),
+                            ]),
+                        )],
+                        value: Box::new(RespValue::bulk(
+                            b"Some real reply following the attribute".to_vec(),
+                        )),
+                    },
+                    "bignum" => {
+                        RespValue::BigNumber(b"1234567999999999999999999999999999999".to_vec())
+                    }
+                    "true" => RespValue::Boolean(true),
+                    "false" => RespValue::Boolean(false),
+                    "double" => RespValue::Double(std::f64::consts::PI),
+                    "null" => RespValue::Null,
+                    "map" => RespValue::Map(vec![
+                        (RespValue::bulk(b"a".to_vec()), RespValue::Integer(1)),
+                        (RespValue::bulk(b"b".to_vec()), RespValue::Integer(2)),
+                    ]),
+                    "set" => RespValue::Set(vec![
+                        RespValue::bulk(b"a".to_vec()),
+                        RespValue::bulk(b"b".to_vec()),
+                    ]),
+                    "verbatim" => RespValue::VerbatimString {
+                        format: *b"txt",
+                        data: b"Some verbatim string".to_vec(),
+                    },
+                    "push" => RespValue::Push(vec![
+                        RespValue::bulk(b"message".to_vec()),
+                        RespValue::bulk(b"payload".to_vec()),
+                    ]),
+                    "array" => RespValue::Array(vec![RespValue::Integer(1), RespValue::Integer(2)]),
+                    "integer" => RespValue::Integer(42),
+                    "bulk" => RespValue::bulk(b"bulk string".to_vec()),
+                    "simple" => RespValue::simple("simple string"),
+                    "error" => RespValue::error("ERR protocol error reply"),
+                    _ => {
+                        return Outcome::error(format!(
+                            "ERR unknown DEBUG PROTOCOL type '{}'",
+                            String::from_utf8_lossy(&args[2])
+                        ));
+                    }
+                };
+                Outcome::reply(reply)
             }
             "SET-ACTIVE-EXPIRE" | "QUICKLIST-PACKED-THRESHOLD" | "STRINGMATCH-LEN" => Outcome::ok(),
             "JMAP" => Outcome::ok(),
@@ -1261,18 +1823,6 @@ impl State {
     }
 }
 
-fn debug_encoding(value: &[u8]) -> &'static str {
-    if let Ok(parsed) = parse_i64(value)
-        && parsed.to_string().as_bytes() == value
-    {
-        "int"
-    } else if value.len() <= 44 {
-        "embstr"
-    } else {
-        "raw"
-    }
-}
-
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in bytes {
@@ -1280,6 +1830,10 @@ fn fnv1a(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+fn wrong_type() -> Outcome {
+    Outcome::error("WRONGTYPE Operation against a key holding the wrong kind of value")
 }
 
 fn client_error(subcommand: &str) -> Outcome {
@@ -1614,6 +2168,154 @@ mod tests {
         assert_eq!(
             text.split_whitespace().nth(1),
             second.split_whitespace().nth(1)
+        );
+    }
+
+    #[test]
+    fn set_commands_and_encoding() {
+        let mut state = state();
+        let mut client = new_client();
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SADD", b"s", b"a", b"b"]),
+            RespValue::Integer(2)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SADD", b"s", b"b", b"c"]),
+            RespValue::Integer(1)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SCARD", b"s"]),
+            RespValue::Integer(3)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SISMEMBER", b"s", b"a"]),
+            RespValue::Integer(1)
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"SMISMEMBER", b"s", b"a", b"zzz"]
+            ),
+            RespValue::Array(vec![RespValue::Integer(1), RespValue::Integer(0)])
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"TYPE", b"s"]),
+            RespValue::simple("set")
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"OBJECT", b"ENCODING", b"s"]),
+            RespValue::bulk(b"hashtable".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SREM", b"s", b"a", b"missing"]),
+            RespValue::Integer(1)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SMEMBERS", b"s"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"b".to_vec()),
+                RespValue::bulk(b"c".to_vec())
+            ])
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SREM", b"s", b"b", b"c"]),
+            RespValue::Integer(2)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"EXISTS", b"s"]),
+            RespValue::Integer(0)
+        );
+    }
+
+    #[test]
+    fn set_intset_encoding_and_wrongtype() {
+        let mut state = state();
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"SADD", b"ints", b"1", b"2"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"OBJECT", b"ENCODING", b"ints"]),
+            RespValue::bulk(b"intset".to_vec())
+        );
+        run(&mut state, &mut client, &[b"SADD", b"ints", b"three"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"OBJECT", b"ENCODING", b"ints"]),
+            RespValue::bulk(b"hashtable".to_vec())
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"GET", b"ints"]),
+            RespValue::error("WRONGTYPE Operation against a key holding the wrong kind of value")
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SADD", b"str", b"x"]),
+            RespValue::Integer(1)
+        );
+        run(&mut state, &mut client, &[b"SET", b"str", b"value"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SADD", b"str", b"y"]),
+            RespValue::error("WRONGTYPE Operation against a key holding the wrong kind of value")
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"GET", b"str"]),
+            RespValue::bulk(b"value".to_vec())
+        );
+    }
+
+    #[test]
+    fn set_operations_and_srandmember() {
+        let mut state = state();
+        let mut client = new_client();
+        run(&mut state, &mut client, &[b"SADD", b"a", b"1", b"2", b"3"]);
+        run(&mut state, &mut client, &[b"SADD", b"b", b"2", b"3", b"4"]);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SINTER", b"a", b"b"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"2".to_vec()),
+                RespValue::bulk(b"3".to_vec())
+            ])
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SUNION", b"a", b"b"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"1".to_vec()),
+                RespValue::bulk(b"2".to_vec()),
+                RespValue::bulk(b"3".to_vec()),
+                RespValue::bulk(b"4".to_vec())
+            ])
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SDIFF", b"a", b"b"]),
+            RespValue::Array(vec![RespValue::bulk(b"1".to_vec())])
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut client,
+                &[b"SINTERSTORE", b"dst", b"a", b"b"]
+            ),
+            RespValue::Integer(2)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SCARD", b"dst"]),
+            RespValue::Integer(2)
+        );
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SRANDMEMBER", b"missing"]),
+            RespValue::NullArray
+        );
+        let reply = run(&mut state, &mut client, &[b"SRANDMEMBER", b"a", b"100"]);
+        let RespValue::Array(values) = reply else {
+            panic!("expected array");
+        };
+        assert_eq!(values.len(), 3);
+        let reply = run(&mut state, &mut client, &[b"SPOP", b"a", b"2"]);
+        let RespValue::Array(values) = reply else {
+            panic!("expected array");
+        };
+        assert_eq!(values.len(), 2);
+        assert_eq!(
+            run(&mut state, &mut client, &[b"SCARD", b"a"]),
+            RespValue::Integer(1)
         );
     }
 

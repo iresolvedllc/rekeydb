@@ -37,10 +37,17 @@ pub enum RespValue {
     Boolean(bool),
     Double(f64),
     BigNumber(Vec<u8>),
-    VerbatimString { format: [u8; 3], data: Vec<u8> },
+    VerbatimString {
+        format: [u8; 3],
+        data: Vec<u8>,
+    },
     Map(Vec<(RespValue, RespValue)>),
     Set(Vec<RespValue>),
     Push(Vec<RespValue>),
+    Attribute {
+        pairs: Vec<(RespValue, RespValue)>,
+        value: Box<RespValue>,
+    },
 }
 
 impl RespValue {
@@ -164,6 +171,19 @@ impl RespValue {
             Self::Push(values) => match version {
                 RespVersion::V2 => write_aggregate(b'*', values, version, out),
                 RespVersion::V3 => write_aggregate(b'>', values, version, out),
+            },
+            Self::Attribute { pairs, value } => match version {
+                RespVersion::V2 => value.encode(version, out),
+                RespVersion::V3 => {
+                    out.push(b'|');
+                    out.extend_from_slice(pairs.len().to_string().as_bytes());
+                    out.extend_from_slice(b"\r\n");
+                    for (key, value) in pairs {
+                        key.encode(version, out);
+                        value.encode(version, out);
+                    }
+                    value.encode(version, out);
+                }
             },
         }
     }
@@ -553,6 +573,44 @@ fn parse_value(
             }
             Ok(Some((RespValue::Map(pairs), offset)))
         }
+        b'|' => {
+            let Some((line, consumed)) = take_line(&input[1..])? else {
+                return Ok(None);
+            };
+            let count = parse_i64(line)?;
+            let count = usize::try_from(count).map_err(|_| {
+                ParseError::Protocol(ProtocolError::new("invalid attribute length"))
+            })?;
+            if count > limits.max_elements {
+                return Err(ParseError::Protocol(ProtocolError::new(
+                    "attribute length exceeds maximum",
+                )));
+            }
+            let mut offset = 1 + consumed;
+            let mut pairs = Vec::with_capacity(count.min(1024));
+            for _ in 0..count {
+                let Some((key, used)) = parse_value(&input[offset..], depth + 1, limits)? else {
+                    return Ok(None);
+                };
+                offset += used;
+                let Some((value, used)) = parse_value(&input[offset..], depth + 1, limits)? else {
+                    return Ok(None);
+                };
+                offset += used;
+                pairs.push((key, value));
+            }
+            let Some((value, used)) = parse_value(&input[offset..], depth + 1, limits)? else {
+                return Ok(None);
+            };
+            offset += used;
+            Ok(Some((
+                RespValue::Attribute {
+                    pairs,
+                    value: Box::new(value),
+                },
+                offset,
+            )))
+        }
         b'_' => {
             if input.len() < 3 {
                 return Ok(None);
@@ -898,6 +956,46 @@ mod tests {
             )])
             .encoded(RespVersion::V3),
             b"%1\r\n+proto\r\n:3\r\n"
+        );
+    }
+
+    #[test]
+    fn encodes_resp3_attributes() {
+        let value = RespValue::Attribute {
+            pairs: vec![(
+                RespValue::bulk(b"key-popularity".to_vec()),
+                RespValue::Array(vec![
+                    RespValue::bulk(b"key:123".to_vec()),
+                    RespValue::Integer(90),
+                ]),
+            )],
+            value: Box::new(RespValue::bulk(
+                b"Some real reply following the attribute".to_vec(),
+            )),
+        };
+        assert_eq!(
+            value.encoded(RespVersion::V2),
+            b"$39\r\nSome real reply following the attribute\r\n"
+        );
+        let resp3 = value.encoded(RespVersion::V3);
+        assert!(resp3.starts_with(b"|1\r\n$14\r\nkey-popularity\r\n*2\r\n"));
+        assert!(resp3.ends_with(b"$39\r\nSome real reply following the attribute\r\n"));
+    }
+
+    #[test]
+    fn decodes_resp3_attributes() {
+        let mut decoder = RespDecoder::default();
+        decoder.feed(b"|1\r\n+k\r\n+v\r\n:42\r\n");
+        let value = decoder.next_value().unwrap().unwrap();
+        assert_eq!(
+            value,
+            RespValue::Attribute {
+                pairs: vec![(
+                    RespValue::SimpleString(b"k".to_vec()),
+                    RespValue::SimpleString(b"v".to_vec())
+                )],
+                value: Box::new(RespValue::Integer(42))
+            }
         );
     }
 

@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 46 / 236
+Implemented: 63 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -11,11 +11,11 @@ Implemented: 46 / 236
 | @geo | 0 | 10 |
 | @hash | 0 | 19 |
 | @hyperloglog | 0 | 5 |
-| @keyspace | 20 | 39 |
+| @keyspace | 21 | 39 |
 | @list | 0 | 21 |
 | @replication | 0 | 3 |
 | @scripting | 0 | 3 |
-| @set | 0 | 16 |
+| @set | 16 | 16 |
 | @sortedset | 0 | 32 |
 | @stream | 0 | 15 |
 | @string | 12 | 22 |
@@ -58,22 +58,6 @@ Implemented: 46 / 236
 - `lrem`
 - `rpoplpush`
 - `lmove`
-- `sadd`
-- `srem`
-- `smove`
-- `sismember`
-- `smismember`
-- `scard`
-- `spop`
-- `srandmember`
-- `sinter`
-- `sinterstore`
-- `sunion`
-- `sunionstore`
-- `sdiff`
-- `sdiffstore`
-- `smembers`
-- `sscan`
 - `zadd`
 - `zincrby`
 - `zrem`
@@ -162,7 +146,6 @@ Implemented: 46 / 236
 - `readonly`
 - `readwrite`
 - `dump`
-- `object`
 - `memory`
 - `eval`
 - `evalsha`
