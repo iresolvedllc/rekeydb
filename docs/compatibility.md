@@ -7,11 +7,11 @@ every row eventually lands.
 |---|---|---|---|
 | RESP2 | yes | — | — |
 | RESP3 | codec, attributes, `HELLO` | push/tracking | — |
-| Commands | all five data types + keyspace | — | remaining 236 |
+| Commands | all data types + keyspace, GEO, HLL, streams | **204/236** | remaining 32 |
 | Expiry | primary TTL | subkey expiry | active cycle parity |
 | MVCC | snapshot core + `DEBUG MVCC` | save/reload readers | async end |
 | Persistence | RDB v9, AOF, DUMP/RESTORE, DIGEST | AOF preamble | AOF edge cases |
-| Replication | — | — | PSYNC, active replica |
+| Replication | full sync + live command stream + ROLE/INFO | replica ACKs, blocking command propagation | backlog/partial resync, diskless modes, blocking WAIT, RDB sync payload |
 | Cluster | — | — | bus, slots, failover |
 | Scripting | — | — | Lua 5.1 |
 | ACL/TLS | — | — | full |
@@ -22,3 +22,5 @@ every row eventually lands.
 | Performance | — | baseline | parity gates |
 
 The generated `spec/coverage.md` is authoritative for command coverage.
+`docs/status.md` tracks completed work, current conformance results, and the
+remaining gaps.

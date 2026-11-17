@@ -200,3 +200,10 @@ xack
 xpending
 xclaim
 xautoclaim
+sync
+psync
+replconf
+slaveof
+replicaof
+stralgo
+lfence

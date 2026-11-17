@@ -19,22 +19,29 @@ Bootstrap / P0. Working today:
 - a `mio` event loop with a global state lock and batched command execution;
 - an MVCC snapshot database with tombstones, nested read views, COW values,
   and KeyDB-compatible timestamps;
-- strings (including bitmaps/BITFIELD and HyperLogLog), lists, hashes, sets,
-  sorted sets, streams with consumer groups, GEO commands, expiry, keyspace
-  commands,
+- strings (including bitmaps/BITFIELD, HyperLogLog, and `STRALGO LCS`),
+  lists, hashes, sets, sorted sets, streams with consumer groups, GEO
+  commands, expiry, keyspace commands,
   `OBJECT ENCODING`,
   `DEBUG MVCC`, `DEBUG PROTOCOL`, `HELLO`, `CLIENT`, `CONFIG`, `INFO`, basic
   `MULTI`/`EXEC`/`WATCH`, `SORT`, and a conformance harness passing all 22
   KeyDB `unit/protocol.tcl` tests, all 176 `unit/type/list.tcl` tests,
   all 76 `unit/type/hash.tcl` tests, all 254 `unit/type/zset.tcl` tests,
   all 56 `unit/geo.tcl` tests, all 20 `unit/hyperloglog.tcl` tests, all
-  56 `unit/type/stream.tcl` tests, and all 51 `unit/keyspace.tcl` tests;
+  56 `unit/type/stream.tcl` tests, all 35 `unit/type/stream-cgroups.tcl`
+  tests, all 72 `unit/type/string.tcl` tests, all 16 `unit/bitfield.tcl`
+  tests, and all 51 `unit/keyspace.tcl` tests;
 - RDB v9 save/load, `SAVE`/`BGSAVE`, `DEBUG RELOAD`, `DEBUG DIGEST`, and
   `DUMP`/`RESTORE`, cross-compatible with KeyDB in both directions for strings, lists, hashes,
   sets, sorted sets, and expirations;
 - append-only persistence with `appendonly`, `appendfsync`, `BGREWRITEAOF`,
   startup replay, truncation handling, and `DEBUG LOADAOF`;
-- generated command/config/test manifests and a Zig `rekeydb-cli`.
+- master/replica replication with full resynchronization, live command
+  propagation, replica read-only enforcement, offsets/ACKs, `ROLE`,
+  `INFO replication`, and basic `WAIT`; partial resync and diskless modes
+  remain future work;
+- generated command/config/test manifests, `docs/status.md` engineering
+  status, and a Zig `rekeydb-cli`.
 
 The reference KeyDB tree lives in `KeyDB/` (development snapshot) and
 `reference/keydb/` (upstream v6.3.4, fetched on demand). Both are read-only

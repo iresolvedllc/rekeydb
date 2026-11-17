@@ -23,14 +23,28 @@ ID generation edge cases, exact/approximate `MAXLEN`/`MINID` trimming with
 node-aware `LIMIT`, blocking `XREAD`, `XINFO`, `XSETID`, and AOF round-trips
 for empty streams and deleted last entries.
 
-The consumer-group portion of `unit/type/stream-cgroups.tcl` passes its first
-**32** tests, including `XGROUP`, `XREADGROUP` history and new-message reads,
+The consumer-group suite (`unit/type/stream-cgroups.tcl`) passes all **35**
+tests, including `XGROUP`, `XREADGROUP` history and new-message reads,
 `XPENDING`, `XACK`, `XCLAIM`, `XAUTOCLAIM`, `XINFO FULL`, blocking group
-reads, and AOF rewrite of groups/consumers. The remaining tests require
-replication (`SLAVEOF`).
+reads, AOF rewrite of groups/consumers, and consumer-group state propagation
+to a replica.
+
+The string suite (`unit/type/string.tcl`) passes all **72** tests, including
+`STRALGO LCS`, extended `SET` options, `SETRANGE` edge cases, and command
+propagation to attached replication streams.
+
+The bitfield suite (`unit/bitfield.tcl`) passes all **16** tests, including
+blocking replication of bitfield writes and bitfield-overflow fuzzing.
 
 The keyspace suite (`unit/keyspace.tcl`) passes all **51** tests, including
 stream `COPY` and `DEBUG DIGEST-VALUE`.
+
+Replication core is exercised by the suites above and by a focused
+`integration/replication.tcl` run: **23 tests pass**, covering full sync,
+live propagation, blocking list replication, `GETSET`/`GETDEL` rewriting,
+`ROLE`, and `FLUSHALL`. The suite then reaches an `EVAL` test and stops
+because scripting is not implemented; two handshake-delay tests and four
+concurrent multi-replica digest tests remain outstanding.
 
 The reference binary passes all 22 protocol tests.
 
@@ -92,14 +106,18 @@ Additional suites:
   merges, and cached cardinality invalidation;
 
 - `unit/bitops.tcl`: **53/53 pass**;
-- `unit/bitfield.tcl`: 13 core tests pass, then replication setup is required;
+- `unit/bitfield.tcl`: **16/16 pass**;
 - `unit/type/incr.tcl`: **24/24 pass**;
-- `unit/type/string.tcl`: 19 pass before replication-stream helpers.
+- `unit/type/string.tcl`: **72/72 pass**;
+- `unit/keyspace.tcl`: **51/51 pass**.
 
 ## Next
 
-- Replication, scripting, and cluster.
+- Replication hardening: partial resync/backlog, diskless modes, blocking
+  `WAIT`, RDB-based full sync, and the remaining multi-replica digest tests.
+- Scripting (`EVAL`/`EVALSHA`/`SCRIPT`).
 - Stream RDB and `DUMP` payloads (listpack encoding).
+- Cluster, modules, Sentinel, ACL/TLS, and FLASH.
 - `KEYDB.NHGET`/`NHSET` nested hashes.
 - AOF RDB preamble support and automatic rewrite thresholds.
 - Compact RDB output (quicklist/ziplist/intset/hash-ziplist/zset-ziplist) for

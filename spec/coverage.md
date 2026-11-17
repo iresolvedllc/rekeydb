@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 197 / 236
+Implemented: 204 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -13,14 +13,14 @@ Implemented: 197 / 236
 | @hyperloglog | 5 | 5 |
 | @keyspace | 31 | 39 |
 | @list | 21 | 21 |
-| @replication | 0 | 3 |
+| @replication | 3 | 3 |
 | @scripting | 0 | 3 |
 | @set | 16 | 16 |
 | @sortedset | 32 | 32 |
 | @stream | 15 | 15 |
-| @string | 21 | 22 |
+| @string | 22 | 22 |
 | @transaction | 5 | 5 |
-| uncategorized | 7 | 28 |
+| uncategorized | 10 | 28 |
 
 ## Missing
 
@@ -28,12 +28,7 @@ Implemented: 197 / 236
 - `expdel`
 - `keydb.mexists`
 - `replping`
-- `sync`
-- `psync`
-- `replconf`
 - `monitor`
-- `slaveof`
-- `replicaof`
 - `subscribe`
 - `unsubscribe`
 - `psubscribe`
@@ -57,9 +52,7 @@ Implemented: 197 / 236
 - `acl`
 - `rreplay`
 - `keydb.cron`
-- `stralgo`
 - `keydb.nhget`
 - `keydb.nhset`
 - `KEYDB.MVCCRESTORE`
 - `failover`
-- `lfence`
