@@ -20,10 +20,10 @@ fn main() -> ExitCode {
             println!("rekeydb {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Startup::Run(config) => match rekeydb_server::run(config) {
+        Startup::Run(config) => match rekeydb_server::run(*config) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
-                eprintln!("rekeydb: {err}");
+                println!("rekeydb: {err}");
                 ExitCode::FAILURE
             }
         },

@@ -8,6 +8,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use indexmap::IndexMap;
+
 /// Thresholds mirrored from Redis 6.2 / KeyDB configuration defaults.
 #[derive(Debug, Clone, Copy)]
 pub struct EncodingLimits {
@@ -32,16 +34,18 @@ impl Default for EncodingLimits {
 
 /// Sorted set placeholder. A skiplist-backed implementation lands with the
 /// ZSET command family; scores are authoritative here.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SortedSet {
     pub scores: HashMap<Vec<u8>, f64>,
 }
 
-#[derive(Debug, Clone)]
+pub type HashValue = IndexMap<Vec<u8>, Vec<u8>>;
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(Vec<u8>),
     List(VecDeque<Vec<u8>>),
-    Hash(HashMap<Vec<u8>, Vec<u8>>),
+    Hash(HashValue),
     Set(HashSet<Vec<u8>>),
     ZSet(SortedSet),
 }
@@ -161,6 +165,48 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn as_list(&self) -> Option<&VecDeque<Vec<u8>>> {
+        match self {
+            Self::List(list) => Some(list),
+            _ => None,
+        }
+    }
+
+    pub fn as_list_mut(&mut self) -> Option<&mut VecDeque<Vec<u8>>> {
+        match self {
+            Self::List(list) => Some(list),
+            _ => None,
+        }
+    }
+
+    pub fn as_hash(&self) -> Option<&HashValue> {
+        match self {
+            Self::Hash(map) => Some(map),
+            _ => None,
+        }
+    }
+
+    pub fn as_hash_mut(&mut self) -> Option<&mut HashValue> {
+        match self {
+            Self::Hash(map) => Some(map),
+            _ => None,
+        }
+    }
+
+    pub fn as_zset(&self) -> Option<&SortedSet> {
+        match self {
+            Self::ZSet(zset) => Some(zset),
+            _ => None,
+        }
+    }
+
+    pub fn as_zset_mut(&mut self) -> Option<&mut SortedSet> {
+        match self {
+            Self::ZSet(zset) => Some(zset),
+            _ => None,
+        }
+    }
 }
 
 fn string_encoding(bytes: &[u8]) -> &'static str {
@@ -181,6 +227,52 @@ pub fn is_canonical_int(bytes: &[u8]) -> bool {
         return false;
     };
     value.to_string().as_bytes() == bytes
+}
+
+/// Format a double like C's `%.17g`, which KeyDB uses for sorted-set scores
+/// in DUMP/digest output and RESP2 replies.
+pub fn format_double_17g(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".to_string();
+    }
+    if value == f64::INFINITY {
+        return "inf".to_string();
+    }
+    if value == f64::NEG_INFINITY {
+        return "-inf".to_string();
+    }
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let exponent = value.abs().log10().floor() as i32;
+    if !(-4..17).contains(&exponent) {
+        let text = format!("{value:.16e}");
+        if let Some(position) = text.find('e') {
+            let exponent_text = text[position + 1..].to_string();
+            let mut mantissa = text[..position].to_string();
+            while mantissa.ends_with('0') {
+                mantissa.pop();
+            }
+            if mantissa.ends_with('.') {
+                mantissa.pop();
+            }
+            let exponent_value: i32 = exponent_text.parse().unwrap_or(0);
+            return format!("{mantissa}e{exponent_value:+03}");
+        }
+        return text;
+    }
+    let decimals = (17 - 1 - exponent).max(0) as usize;
+    let mut text = format!("{value:.decimals$}");
+    while text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    if text == "-0" {
+        text = "0".to_string();
+    }
+    text
 }
 
 #[cfg(test)]

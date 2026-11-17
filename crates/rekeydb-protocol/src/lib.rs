@@ -316,6 +316,8 @@ impl From<ProtocolError> for ParseError {
 #[derive(Debug)]
 pub struct RespDecoder {
     buffer: Vec<u8>,
+    start: usize,
+    consumed_total: usize,
     limits: Limits,
 }
 
@@ -329,45 +331,72 @@ impl RespDecoder {
     pub fn new(limits: Limits) -> Self {
         Self {
             buffer: Vec::new(),
+            start: 0,
+            consumed_total: 0,
             limits,
         }
     }
 
     /// Append bytes received from the network.
     pub fn feed(&mut self, data: &[u8]) {
+        if self.start == self.buffer.len() {
+            self.buffer.clear();
+            self.start = 0;
+        }
         self.buffer.extend_from_slice(data);
     }
 
     /// Number of buffered bytes not yet consumed.
     pub fn buffered(&self) -> usize {
-        self.buffer.len()
+        self.buffer.len() - self.start
+    }
+
+    /// Total bytes consumed since this decoder was created.
+    pub fn position(&self) -> usize {
+        self.consumed_total
+    }
+
+    /// Peek at the next unconsumed byte without advancing.
+    pub fn peek_byte(&self) -> Option<u8> {
+        self.buffer.get(self.start).copied()
     }
 
     /// Decode the next command, returning `Ok(None)` when more bytes are
     /// needed. A protocol error is fatal for the connection.
     pub fn next_command(&mut self) -> Result<Option<Command>, ProtocolError> {
-        let parsed = match parse_command(&self.buffer, &self.limits) {
+        let parsed = match parse_command(&self.buffer[self.start..], &self.limits) {
             Ok(value) => value,
             Err(ParseError::Protocol(err)) => return Err(err),
         };
         let Some((command, consumed)) = parsed else {
             return Ok(None);
         };
-        self.buffer.drain(..consumed);
+        self.start += consumed;
+        self.consumed_total += consumed;
+        self.compact();
         Ok(Some(command))
     }
 
     /// Decode the next generic RESP value. Used by tests, modules, and tools.
     pub fn next_value(&mut self) -> Result<Option<RespValue>, ProtocolError> {
-        let parsed = match parse_value(&self.buffer, 0, &self.limits) {
+        let parsed = match parse_value(&self.buffer[self.start..], 0, &self.limits) {
             Ok(value) => value,
             Err(ParseError::Protocol(err)) => return Err(err),
         };
         let Some((value, consumed)) = parsed else {
             return Ok(None);
         };
-        self.buffer.drain(..consumed);
+        self.start += consumed;
+        self.consumed_total += consumed;
+        self.compact();
         Ok(Some(value))
+    }
+
+    fn compact(&mut self) {
+        if self.start > 64 * 1024 && self.start * 2 >= self.buffer.len() {
+            self.buffer.drain(..self.start);
+            self.start = 0;
+        }
     }
 }
 

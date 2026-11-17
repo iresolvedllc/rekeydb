@@ -7,3 +7,5 @@
 | [0003](0003-threading.md) | Thread-per-event-loop, batched global lock ownership |
 | [0004](0004-compatibility-target.md) | Full KeyDB parity against a pinned source tree |
 | [0005](0005-zig-storage-abi.md) | Zig storage behind a narrow versioned C ABI |
+| [0006](0006-rdb.md) | RDB v9 and DUMP payload compatibility |
+| [0007](0007-aof.md) | Append-only persistence and truncation policy |

@@ -1,6 +1,6 @@
 # Zig substrate and tools
 
-Zig 0.17.0 is pinned in `zig-version`.
+Zig 0.17.1 is pinned in `zig-version`.
 
 Build the CLI directly:
 

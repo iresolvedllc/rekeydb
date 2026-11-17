@@ -15,6 +15,12 @@ pub struct Config {
     pub server_threads: usize,
     pub requirepass: Option<String>,
     pub dir: PathBuf,
+    pub dbfilename: String,
+    pub appendonly: bool,
+    pub appendfilename: String,
+    pub appendfsync: String,
+    pub aof_use_rdb_preamble: bool,
+    pub aof_load_truncated: bool,
     pub logfile: Option<String>,
     pub config_file: Option<PathBuf>,
 }
@@ -28,6 +34,12 @@ impl Default for Config {
             server_threads: 1,
             requirepass: None,
             dir: PathBuf::from("."),
+            dbfilename: "dump.rdb".to_string(),
+            appendonly: false,
+            appendfilename: "appendonly.aof".to_string(),
+            appendfsync: "everysec".to_string(),
+            aof_use_rdb_preamble: true,
+            aof_load_truncated: true,
             logfile: None,
             config_file: None,
         }
@@ -36,7 +48,7 @@ impl Default for Config {
 
 #[derive(Debug)]
 pub enum Startup {
-    Run(Config),
+    Run(Box<Config>),
     Version,
     Help,
 }
@@ -151,7 +163,7 @@ impl Config {
             }
         }
         config.validate()?;
-        Ok(Startup::Run(config))
+        Ok(Startup::Run(Box::new(config)))
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -211,6 +223,12 @@ pub fn parse_str(text: &str) -> Result<Config, String> {
                 };
             }
             "dir" => config.dir = PathBuf::from(value),
+            "dbfilename" => config.dbfilename = value.to_string(),
+            "appendonly" => config.appendonly = parse_yes_no(value),
+            "appendfilename" => config.appendfilename = value.to_string(),
+            "appendfsync" => config.appendfsync = value.to_string(),
+            "aof-use-rdb-preamble" => config.aof_use_rdb_preamble = parse_yes_no(value),
+            "aof-load-truncated" => config.aof_load_truncated = parse_yes_no(value),
             "logfile" => {
                 config.logfile = if value.is_empty() {
                     None
@@ -223,6 +241,10 @@ pub fn parse_str(text: &str) -> Result<Config, String> {
     }
     config.validate()?;
     Ok(config)
+}
+
+fn parse_yes_no(value: &str) -> bool {
+    matches!(value.to_ascii_lowercase().as_str(), "yes" | "true" | "1")
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -344,7 +366,7 @@ save 900 1
         ])
         .unwrap()
         {
-            Startup::Run(config) => config,
+            Startup::Run(config) => *config,
             other => panic!("unexpected startup: {other:?}"),
         };
         assert_eq!(config.port, 6381);
@@ -360,7 +382,7 @@ save 900 1
         ])
         .unwrap()
         {
-            Startup::Run(config) => config,
+            Startup::Run(config) => *config,
             other => panic!("unexpected startup: {other:?}"),
         };
         assert_eq!(config.port, 6382);

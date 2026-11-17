@@ -7,10 +7,10 @@ every row eventually lands.
 |---|---|---|---|
 | RESP2 | yes | — | — |
 | RESP3 | codec, attributes, `HELLO` | push/tracking | — |
-| Commands | strings + sets + keyspace | lists, hashes, zsets | remaining 236 |
+| Commands | all five data types + keyspace | — | remaining 236 |
 | Expiry | primary TTL | subkey expiry | active cycle parity |
 | MVCC | snapshot core + `DEBUG MVCC` | save/reload readers | async end |
-| Persistence | — | RDB load/save, DUMP | AOF |
+| Persistence | RDB v9, AOF, DUMP/RESTORE, DIGEST | AOF preamble | AOF edge cases |
 | Replication | — | — | PSYNC, active replica |
 | Cluster | — | — | bus, slots, failover |
 | Scripting | — | — | Lua 5.1 |

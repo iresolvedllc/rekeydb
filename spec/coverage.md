@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 63 / 236
+Implemented: 151 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -9,23 +9,22 @@ Implemented: 63 / 236
 | @connection | 7 | 8 |
 | @dangerous | 2 | 2 |
 | @geo | 0 | 10 |
-| @hash | 0 | 19 |
+| @hash | 17 | 19 |
 | @hyperloglog | 0 | 5 |
-| @keyspace | 21 | 39 |
-| @list | 0 | 21 |
+| @keyspace | 28 | 39 |
+| @list | 21 | 21 |
 | @replication | 0 | 3 |
 | @scripting | 0 | 3 |
 | @set | 16 | 16 |
-| @sortedset | 0 | 32 |
+| @sortedset | 32 | 32 |
 | @stream | 0 | 15 |
-| @string | 12 | 22 |
-| @transaction | 0 | 5 |
-| uncategorized | 4 | 28 |
+| @string | 15 | 22 |
+| @transaction | 5 | 5 |
+| uncategorized | 7 | 28 |
 
 ## Missing
 
 - `module`
-- `getex`
 - `setnx`
 - `setex`
 - `psetex`
@@ -35,98 +34,16 @@ Implemented: 63 / 236
 - `getbit`
 - `bitfield`
 - `bitfield_ro`
-- `setrange`
-- `getrange`
 - `substr`
-- `rpush`
-- `lpush`
-- `rpushx`
-- `lpushx`
-- `linsert`
-- `rpop`
-- `lpop`
-- `brpop`
-- `brpoplpush`
-- `blmove`
-- `blpop`
-- `llen`
-- `lindex`
-- `lset`
-- `lrange`
-- `ltrim`
-- `lpos`
-- `lrem`
-- `rpoplpush`
-- `lmove`
-- `zadd`
-- `zincrby`
-- `zrem`
-- `zremrangebyscore`
-- `zremrangebyrank`
-- `zremrangebylex`
-- `zunionstore`
-- `zinterstore`
-- `zdiffstore`
-- `zunion`
-- `zinter`
-- `zdiff`
-- `zrange`
-- `zrangestore`
-- `zrangebyscore`
-- `zrevrangebyscore`
-- `zrangebylex`
-- `zrevrangebylex`
-- `zcount`
-- `zlexcount`
-- `zrevrange`
-- `zcard`
-- `zscore`
-- `zmscore`
-- `zrank`
-- `zrevrank`
-- `zscan`
-- `zpopmin`
-- `zpopmax`
-- `bzpopmin`
-- `bzpopmax`
-- `zrandmember`
-- `hset`
-- `hsetnx`
-- `hget`
-- `hmset`
-- `hmget`
-- `hincrby`
-- `hincrbyfloat`
-- `hdel`
-- `hlen`
-- `hstrlen`
-- `hkeys`
-- `hvals`
-- `hgetall`
-- `hexists`
-- `hrandfield`
-- `hscan`
 - `incrbyfloat`
 - `msetnx`
 - `swapdb`
 - `move`
 - `copy`
-- `rename`
-- `renamenx`
-- `expiremember`
-- `expirememberat`
-- `pexpirememberat`
 - `replping`
-- `save`
-- `bgsave`
-- `bgrewriteaof`
-- `multi`
-- `exec`
-- `discard`
 - `sync`
 - `psync`
 - `replconf`
-- `sort`
 - `monitor`
 - `slaveof`
 - `replicaof`
@@ -136,16 +53,12 @@ Implemented: 63 / 236
 - `punsubscribe`
 - `publish`
 - `pubsub`
-- `watch`
-- `unwatch`
 - `cluster`
-- `restore`
 - `restore-asking`
 - `migrate`
 - `asking`
 - `readonly`
 - `readwrite`
-- `dump`
 - `memory`
 - `eval`
 - `evalsha`
@@ -190,7 +103,6 @@ Implemented: 63 / 236
 - `acl`
 - `rreplay`
 - `keydb.cron`
-- `keydb.hrename`
 - `stralgo`
 - `keydb.nhget`
 - `keydb.nhset`

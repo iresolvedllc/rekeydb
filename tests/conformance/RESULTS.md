@@ -2,15 +2,23 @@
 
 ## Bootstrap results
 
-The adapted harness runs KeyDB's `unit/protocol.tcl` (22 tests). rekeydb now
-passes 21 of 22:
+The adapted harness runs KeyDB's `unit/protocol.tcl` (22 tests). rekeydb
+passes all 22, including the blocking `BLPOP` pipelining regression.
 
-- protocol parsing, error strings, inline quoting, desync tests,
-  raw-response tests, RESP3 attributes, big numbers, booleans, and the RESP2
-  attribute fallback all pass;
-- the final regression test needs lists and blocking `BLPOP`; it moves to P2.
+The list suite (`unit/type/list.tcl`) passes all **176** tests, including
+`DEBUG RELOAD`, `DUMP`/`RESTORE`, blocking pops/moves, `MULTI`/`EXEC`, basic
+`WATCH`, `RENAME`, and `SORT ... STORE`.
 
-The reference binary passes all 22.
+The hash suite (`unit/type/hash.tcl`) passes all **76** tests, including
+ziplist/hashtable promotion, `HRANDFIELD`, `HSCAN`, `HINCRBYFLOAT`, encoding
+edge cases, `DUMP`/`RESTORE`, and `KEYDB.HRENAME`.
+
+The sorted-set suite (`unit/type/zset.tcl`) passes all **254** tests, including
+ziplist/skiplist encodings, range/lex/score queries, set-operation stores,
+blocking `BZPOPMIN`/`BZPOPMAX`, `ZRANDMEMBER`, `ZSCAN`, RDB reload, and RESP3
+reply shapes.
+
+The reference binary passes all 22 protocol tests.
 
 ## Running
 
@@ -37,7 +45,13 @@ it has been built.
 - 27 string/keyspace commands;
 - 14 error/edge-case replies;
 - 29 set commands including encodings, wrong-type errors, stores, and
-  single-member random operations.
+  single-member random operations;
+- 32 list/transaction commands including blocking wakeups, moves, `MULTI`,
+  `EXEC`, `RENAME`, and `SORT ... STORE`;
+- RDB files and `DUMP` payloads both ways with KeyDB for strings, lists,
+  hashes, sets, sorted sets, and expirations;
+- `DEBUG DIGEST` values match KeyDB exactly on all five data types and
+  expirations.
 
 ## Oracle build
 
@@ -45,8 +59,19 @@ it has been built.
 NixOS it supplies `libuuid`, OpenSSL, and zlib through `nix-shell`; on Debian
 and Ubuntu install `uuid-dev`, `libssl-dev`, and `zlib1g-dev`.
 
+AOF coverage:
+
+- `unit/aofrw.tcl`: **19/19 pass**, including rewrite under concurrent write
+  load, all five data types, delayed/refused rewrite handling, and AOF-enabled
+  restart behavior;
+- `integration/aof.tcl`: **25/25 pass**, including truncated AOF recovery,
+  incomplete MULTI handling, bad-format detection, `keydb-check-aof`, SPOP,
+  EXPIREAT, and fsync timing.
+
 ## Next
 
-- Lists, hashes, and sorted sets with Redis 6.2 encodings.
-- Blocking command framework (the final protocol regression).
-- RDB v9 load/save and `DEBUG DIGEST`.
+- Streams, HLL, GEO, bitfield/bitpos/BITOP breadth.
+- `KEYDB.NHGET`/`NHSET` nested hashes.
+- AOF RDB preamble support and automatic rewrite thresholds.
+- Compact RDB output (quicklist/ziplist/intset/hash-ziplist/zset-ziplist) for
+  byte-level parity.

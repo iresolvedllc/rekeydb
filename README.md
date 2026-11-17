@@ -19,9 +19,18 @@ Bootstrap / P0. Working today:
 - a `mio` event loop with a global state lock and batched command execution;
 - an MVCC snapshot database with tombstones, nested read views, COW values,
   and KeyDB-compatible timestamps;
-- strings, sets, expiry, keyspace commands, `OBJECT ENCODING`, `DEBUG MVCC`,
-  `DEBUG PROTOCOL`, `HELLO`, `CLIENT`, `CONFIG`, `INFO`, and a conformance
-  harness passing 21 of 22 KeyDB `unit/protocol.tcl` tests;
+- strings, lists, hashes, sets, sorted sets, expiry, keyspace commands,
+  `OBJECT ENCODING`,
+  `DEBUG MVCC`, `DEBUG PROTOCOL`, `HELLO`, `CLIENT`, `CONFIG`, `INFO`, basic
+  `MULTI`/`EXEC`/`WATCH`, `SORT`, and a conformance harness passing all 22
+  KeyDB `unit/protocol.tcl` tests, all 176 `unit/type/list.tcl` tests, and
+  all 76 `unit/type/hash.tcl` tests, and all 254 `unit/type/zset.tcl`
+  tests;
+- RDB v9 save/load, `SAVE`/`BGSAVE`, `DEBUG RELOAD`, `DEBUG DIGEST`, and
+  `DUMP`/`RESTORE`, cross-compatible with KeyDB in both directions for strings, lists, hashes,
+  sets, sorted sets, and expirations;
+- append-only persistence with `appendonly`, `appendfsync`, `BGREWRITEAOF`,
+  startup replay, truncation handling, and `DEBUG LOADAOF`;
 - generated command/config/test manifests and a Zig `rekeydb-cli`.
 
 The reference KeyDB tree lives in `KeyDB/` (development snapshot) and
@@ -33,6 +42,7 @@ inputs for the specification extractor and conformance oracle.
 ```
 crates/rekeydb-protocol   RESP2/RESP3 codec
 crates/rekeydb-core       dict, values, MVCC snapshots, expiry
+crates/rekeydb-persist    RDB v9, DUMP/RESTORE, dataset digests
 crates/rekeydb-server     server binary
 xtask                     spec extraction and developer tasks
 spec/                     generated command/config/test manifests
@@ -49,7 +59,7 @@ make test
 make check
 ```
 
-The pinned toolchain is in `rust-toolchain.toml`. Zig 0.17.0 is pinned in
+The pinned toolchain is in `rust-toolchain.toml`. Zig 0.17.1 is pinned in
 `zig/zig-version`. Build the Zig tools with:
 
 ```sh

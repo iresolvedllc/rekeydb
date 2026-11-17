@@ -9,17 +9,23 @@ use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use mio::net::{TcpListener, TcpStream};
 use mio::{Events, Interest, Poll, Token};
 use rekeydb_protocol::{ProtocolError, RespDecoder, RespValue, RespVersion};
 
 use crate::config::Config;
-use crate::state::{ClientContext, State};
+use crate::state::{BlockKind, BlockRequest, ClientContext, State};
 
 const LISTENER: Token = Token(0);
 const MAX_OUTPUT_BUFFER: usize = 64 * 1024 * 1024;
 const MAX_QUERY_BUFFER: usize = 64 * 1024 * 1024;
+
+struct BlockedClient {
+    request: BlockRequest,
+    deadline: Option<Instant>,
+}
 
 struct Client {
     stream: TcpStream,
@@ -28,6 +34,7 @@ struct Client {
     ctx: ClientContext,
     close_after_flush: bool,
     shutdown_after_flush: bool,
+    blocked: Option<BlockedClient>,
 }
 
 impl Client {
@@ -39,11 +46,13 @@ impl Client {
             ctx,
             close_after_flush: false,
             shutdown_after_flush: false,
+            blocked: None,
         }
     }
 }
 
 pub fn run(config: Config) -> Result<(), String> {
+    println!("rekeydb PID: {}", std::process::id());
     let address = resolve_address(&config)?;
     let mut listener = match TcpListener::bind(address) {
         Ok(listener) => listener,
@@ -65,18 +74,42 @@ pub fn run(config: Config) -> Result<(), String> {
         .register(&mut listener, LISTENER, Interest::READABLE)
         .map_err(|err| format!("cannot register listener: {err}"))?;
 
+    let mut state = State::new(config.clone());
+    let rdb_path = config.dir.join(&config.dbfilename);
+    let aof_path = config.dir.join(&config.appendfilename);
+    if config.appendonly {
+        if aof_path.is_file() {
+            state
+                .load_aof_from_disk()
+                .map_err(|err| format!("cannot load {}: {err}", aof_path.display()))?;
+        } else {
+            if rdb_path.is_file() {
+                state
+                    .reload_rdb_from_disk()
+                    .map_err(|err| format!("cannot load {}: {err}", rdb_path.display()))?;
+            }
+            state
+                .enable_aof()
+                .map_err(|err| format!("cannot enable AOF: {err}"))?;
+        }
+    } else if rdb_path.is_file() {
+        state
+            .reload_rdb_from_disk()
+            .map_err(|err| format!("cannot load {}: {err}", rdb_path.display()))?;
+    }
     let mut server = Server {
         poll,
         registry,
         listener,
         clients: HashMap::new(),
-        state: Mutex::new(State::new(config.clone())),
+        blocked: Vec::new(),
+        state: Mutex::new(state),
         next_token: 1,
         next_client_id: 1,
         running: true,
         trace_commands: std::env::var_os("REKEYDB_TRACE_COMMANDS").is_some(),
+        trace_names: std::env::var_os("REKEYDB_TRACE_NAMES").is_some(),
     };
-    println!("rekeydb PID: {}", std::process::id());
     println!(
         "rekeydb {} listening on {local} (server-threads={})",
         env!("CARGO_PKG_VERSION"),
@@ -91,11 +124,13 @@ struct Server {
     registry: mio::Registry,
     listener: TcpListener,
     clients: HashMap<Token, Client>,
+    blocked: Vec<Token>,
     state: Mutex<State>,
     next_token: usize,
     next_client_id: u64,
     running: bool,
     trace_commands: bool,
+    trace_names: bool,
 }
 
 impl Server {
@@ -103,8 +138,9 @@ impl Server {
         let mut events = Events::with_capacity(1024);
         while self.running {
             self.poll
-                .poll(&mut events, None)
+                .poll(&mut events, Some(Duration::from_millis(25)))
                 .map_err(|err| format!("poll failed: {err}"))?;
+            self.expire_blocked();
             for event in events.iter() {
                 let token = event.token();
                 if token == LISTENER {
@@ -123,7 +159,8 @@ impl Server {
                     if event.is_error() || event.is_read_closed() {
                         if let Some(mut client) = self.clients.remove(&token) {
                             let _ = self.registry.deregister(&mut client.stream);
-                            self.client_gone();
+                            self.unblock(token);
+                            self.client_gone(client.ctx.id);
                         }
                     } else {
                         self.flush_client(token);
@@ -153,6 +190,7 @@ impl Server {
                     self.clients.insert(token, Client::new(stream, ctx));
                     let mut state = self.state.lock().expect("state poisoned");
                     state.connected_clients += 1;
+                    state.register_client(id);
                     state.stats_mut().total_connections_received += 1;
                 }
                 Err(err) if err.kind() == ErrorKind::WouldBlock => break,
@@ -171,7 +209,11 @@ impl Server {
         let mut buffer = [0u8; 16 * 1024];
         let mut close = false;
         let mut input_bytes = 0usize;
-        loop {
+        let mut reads = 0usize;
+        // Do not let one fast producer monopolize the event loop: drain a
+        // bounded amount, process it, then return to polling other clients.
+        while reads < 16 {
+            reads += 1;
             match client.stream.read(&mut buffer) {
                 Ok(0) => {
                     close = true;
@@ -198,47 +240,88 @@ impl Server {
             close = true;
         }
 
-        let mut commands = Vec::new();
+        if client.blocked.is_some() {
+            self.state
+                .lock()
+                .expect("state poisoned")
+                .stats_mut()
+                .total_net_input_bytes += input_bytes as u64;
+            if close {
+                self.unblock(token);
+                client.close_after_flush = true;
+            }
+            self.flush_client_inner(token, client);
+            return;
+        }
+
+        self.process_client(token, client, input_bytes);
+    }
+
+    fn process_client(&mut self, token: Token, mut client: Client, input_bytes: usize) {
+        let mut close = client.close_after_flush;
+        let mut wakes: Vec<(usize, Vec<u8>)> = Vec::new();
+
         loop {
-            match client.decoder.next_command() {
-                Ok(Some(command)) => {
-                    if !command.args.is_empty() {
-                        commands.push(command);
-                    }
-                }
+            let command = match client.decoder.next_command() {
+                Ok(Some(command)) => command,
                 Ok(None) => break,
                 Err(err) => {
                     append_protocol_error(&mut client.out, &err);
                     close = true;
                     break;
                 }
+            };
+            if command.args.is_empty() {
+                continue;
             }
+            if self.trace_commands {
+                eprintln!("cmd[{}]: {:?}", client.ctx.id, command.args);
+            } else if self.trace_names {
+                eprintln!(
+                    "cmd[{}]: {}",
+                    client.ctx.id,
+                    String::from_utf8_lossy(&command.args[0])
+                );
+            }
+            let mut state = self.state.lock().expect("state poisoned");
+            let outcome = state.execute(&command, &mut client.ctx);
+            drop(state);
+            let mut reply = outcome.reply;
+            if let Some((id, as_error)) = outcome.unblock
+                && !self.unblock_by_id(id, as_error)
+            {
+                reply = RespValue::Integer(0);
+            }
+            if let Some(block) = outcome.block {
+                let deadline = block
+                    .timeout_ms
+                    .map(|milliseconds| Instant::now() + Duration::from_millis(milliseconds));
+                client.blocked = Some(BlockedClient {
+                    request: *block,
+                    deadline,
+                });
+                self.add_blocked(token);
+                break;
+            }
+            reply.encode(client.ctx.version, &mut client.out);
+            if outcome.close {
+                close = true;
+            }
+            if outcome.shutdown {
+                client.shutdown_after_flush = true;
+                close = true;
+            }
+            if close {
+                break;
+            }
+            wakes.extend(outcome.wake);
         }
 
-        if !commands.is_empty() {
-            let mut state = self.state.lock().expect("state poisoned");
-            for command in commands {
-                if self.trace_commands {
-                    eprintln!("cmd[{}]: {:?}", client.ctx.id, command.args);
-                }
-                let outcome = state.execute(&command, &mut client.ctx);
-                outcome.reply.encode(client.ctx.version, &mut client.out);
-                if outcome.close {
-                    close = true;
-                }
-                if outcome.shutdown {
-                    client.shutdown_after_flush = true;
-                    close = true;
-                }
-            }
-            state.stats_mut().total_net_input_bytes += input_bytes as u64;
-        } else {
-            self.state
-                .lock()
-                .expect("state poisoned")
-                .stats_mut()
-                .total_net_input_bytes += input_bytes as u64;
-        }
+        self.state
+            .lock()
+            .expect("state poisoned")
+            .stats_mut()
+            .total_net_input_bytes += input_bytes as u64;
 
         if client.out.len() > MAX_OUTPUT_BUFFER {
             close = true;
@@ -247,6 +330,150 @@ impl Server {
             client.close_after_flush = true;
         }
         self.flush_client_inner(token, client);
+
+        for (db, key) in wakes {
+            self.wake_blocked(db, &key);
+        }
+    }
+
+    fn wake_blocked(&mut self, db: usize, key: &[u8]) {
+        loop {
+            let position = self.blocked.iter().position(|token| {
+                self.clients
+                    .get(token)
+                    .and_then(|client| client.blocked.as_ref())
+                    .is_some_and(|blocked| {
+                        blocked.request.db == db
+                            && blocked
+                                .request
+                                .keys
+                                .iter()
+                                .any(|candidate| candidate == key)
+                    })
+            });
+            let Some(position) = position else {
+                return;
+            };
+            let token = self.remove_blocked_at(position);
+            let Some(mut client) = self.clients.remove(&token) else {
+                continue;
+            };
+            let Some(blocked) = client.blocked.take() else {
+                self.clients.insert(token, client);
+                continue;
+            };
+            let moved_destination = if blocked.request.kind == BlockKind::Move {
+                blocked.request.destination.clone()
+            } else {
+                None
+            };
+            let reply = {
+                let mut state = self.state.lock().expect("state poisoned");
+                state.serve_blocked(&blocked.request)
+            };
+            let Some(reply) = reply else {
+                client.blocked = Some(blocked);
+                self.restore_blocked(position, token);
+                self.clients.insert(token, client);
+                return;
+            };
+            reply.encode(client.ctx.version, &mut client.out);
+            self.process_client(token, client, 0);
+            if let Some(destination) = moved_destination {
+                self.wake_blocked(db, &destination);
+            }
+        }
+    }
+
+    fn expire_blocked(&mut self) {
+        let now = Instant::now();
+        let expired: Vec<Token> = self
+            .blocked
+            .iter()
+            .copied()
+            .filter(|token| {
+                self.clients
+                    .get(token)
+                    .and_then(|client| client.blocked.as_ref())
+                    .and_then(|blocked| blocked.deadline)
+                    .is_some_and(|deadline| deadline <= now)
+            })
+            .collect();
+        for token in expired {
+            self.unblock(token);
+            let Some(mut client) = self.clients.remove(&token) else {
+                continue;
+            };
+            let Some(blocked) = client.blocked.take() else {
+                self.clients.insert(token, client);
+                continue;
+            };
+            let reply = match blocked.request.kind {
+                BlockKind::Pop | BlockKind::ZPop { .. } => RespValue::NullArray,
+                BlockKind::Move => RespValue::null(),
+            };
+            reply.encode(client.ctx.version, &mut client.out);
+            self.process_client(token, client, 0);
+        }
+    }
+
+    fn add_blocked(&mut self, token: Token) {
+        if !self.blocked.contains(&token) {
+            self.blocked.push(token);
+            self.state.lock().expect("state poisoned").blocked_clients += 1;
+        }
+    }
+
+    fn remove_blocked_at(&mut self, position: usize) -> Token {
+        let token = self.blocked.remove(position);
+        let mut state = self.state.lock().expect("state poisoned");
+        state.blocked_clients = state.blocked_clients.saturating_sub(1);
+        token
+    }
+
+    fn restore_blocked(&mut self, position: usize, token: Token) {
+        self.blocked.insert(position, token);
+        self.state.lock().expect("state poisoned").blocked_clients += 1;
+    }
+
+    fn unblock_by_id(&mut self, id: u64, as_error: bool) -> bool {
+        let Some(token) = self
+            .clients
+            .iter()
+            .find(|(_, client)| client.ctx.id == id && client.blocked.is_some())
+            .map(|(token, _)| *token)
+        else {
+            return false;
+        };
+        self.unblock(token);
+        let Some(mut client) = self.clients.remove(&token) else {
+            return false;
+        };
+        let Some(blocked) = client.blocked.take() else {
+            self.clients.insert(token, client);
+            return false;
+        };
+        let reply = if as_error {
+            RespValue::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
+        } else {
+            match blocked.request.kind {
+                BlockKind::Pop | BlockKind::ZPop { .. } => RespValue::NullArray,
+                BlockKind::Move => RespValue::null(),
+            }
+        };
+        reply.encode(client.ctx.version, &mut client.out);
+        self.process_client(token, client, 0);
+        true
+    }
+
+    fn unblock(&mut self, token: Token) {
+        if let Some(position) = self
+            .blocked
+            .iter()
+            .position(|candidate| *candidate == token)
+        {
+            self.remove_blocked_at(position);
+        }
     }
 
     fn flush_client(&mut self, token: Token) {
@@ -283,7 +510,8 @@ impl Server {
 
         if client.close_after_flush && client.out.is_empty() {
             let _ = self.registry.deregister(&mut client.stream);
-            self.client_gone();
+            self.unblock(token);
+            self.client_gone(client.ctx.id);
             if client.shutdown_after_flush {
                 self.running = false;
             }
@@ -301,14 +529,15 @@ impl Server {
         {
             eprintln!("cannot reregister client {}: {err}", client.ctx.id);
             let _ = self.registry.deregister(&mut client.stream);
-            self.client_gone();
+            self.client_gone(client.ctx.id);
             return;
         }
         self.clients.insert(token, client);
     }
 
-    fn client_gone(&mut self) {
+    fn client_gone(&mut self, id: u64) {
         let mut state = self.state.lock().expect("state poisoned");
+        state.unregister_client(id);
         state.connected_clients = state.connected_clients.saturating_sub(1);
     }
 }

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/rekeydb-core",
+    "crates/rekeydb-persist",
     "crates/rekeydb-protocol",
     "crates/rekeydb-server",
     "xtask",
@@ -15,12 +16,15 @@ rust-version = "1.99"
 
 [workspace.dependencies]
 rekeydb-core = { path = "crates/rekeydb-core" }
+rekeydb-persist = { path = "crates/rekeydb-persist" }
 rekeydb-protocol = { path = "crates/rekeydb-protocol" }
 
+indexmap = "2.14"
 mio = { version = "1.2", features = ["net", "os-poll"] }
 regex = "1.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha1 = "0.10"
 
 [profile.release]
 lto = "thin"

@@ -20,7 +20,7 @@ fi
 
 cargo build -q -p rekeydb-server --bin rekeydb
 binary="${REKEYDB_BINARY:-$root/target/debug/rekeydb}"
-run_dir="$root/tests/tmp/conformance"
+run_dir="$root/tests/tmp/conformance-$$"
 
 rm -rf "$run_dir"
 mkdir -p "$run_dir/src"
@@ -30,6 +30,8 @@ ln -s "$binary" "$run_dir/src/keydb-server"
 
 if [ -x "$reference/src/keydb-cli" ]; then
     ln -s "$root/$reference/src/keydb-cli" "$run_dir/src/keydb-cli"
+    [ -x "$reference/src/keydb-check-aof" ] && ln -s "$root/$reference/src/keydb-check-aof" "$run_dir/src/keydb-check-aof"
+    [ -x "$reference/src/keydb-check-rdb" ] && ln -s "$root/$reference/src/keydb-check-rdb" "$run_dir/src/keydb-check-rdb"
 else
     cat > "$run_dir/src/keydb-cli" <<EOF
 #!/usr/bin/env sh
