@@ -13,6 +13,11 @@ The hash suite (`unit/type/hash.tcl`) passes all **76** tests, including
 ziplist/hashtable promotion, `HRANDFIELD`, `HSCAN`, `HINCRBYFLOAT`, encoding
 edge cases, `DUMP`/`RESTORE`, and `KEYDB.HRENAME`.
 
+The sorted-set suite (`unit/type/zset.tcl`) passes all **254** tests, including
+ziplist/skiplist encodings, range/lex/score queries, set-operation stores,
+blocking `BZPOPMIN`/`BZPOPMAX`, `ZRANDMEMBER`, `ZSCAN`, RDB reload, and RESP3
+reply shapes.
+
 The reference binary passes all 22 protocol tests.
 
 ## Running
@@ -44,9 +49,9 @@ it has been built.
 - 32 list/transaction commands including blocking wakeups, moves, `MULTI`,
   `EXEC`, `RENAME`, and `SORT ... STORE`;
 - RDB files and `DUMP` payloads both ways with KeyDB for strings, lists,
-  hashes, sets, and expirations;
-- `DEBUG DIGEST` values match KeyDB exactly on strings, lists, hashes, sets,
-  and expirations.
+  hashes, sets, sorted sets, and expirations;
+- `DEBUG DIGEST` values match KeyDB exactly on all five data types and
+  expirations.
 
 ## Oracle build
 
@@ -56,7 +61,8 @@ and Ubuntu install `uuid-dev`, `libssl-dev`, and `zlib1g-dev`.
 
 ## Next
 
-- Sorted sets and blocking `BZPOPMIN`/`BZPOPMAX`.
 - AOF and `BGREWRITEAOF`.
-- Compact RDB output (quicklist/ziplist/intset/hash-ziplist) for byte-level
-  parity.
+- Streams, HLL, GEO, bitfield/bitpos/BITOP breadth.
+- `KEYDB.NHGET`/`NHSET` nested hashes.
+- Compact RDB output (quicklist/ziplist/intset/hash-ziplist/zset-ziplist) for
+  byte-level parity.

@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 112 / 236
+Implemented: 144 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -16,7 +16,7 @@ Implemented: 112 / 236
 | @replication | 0 | 3 |
 | @scripting | 0 | 3 |
 | @set | 16 | 16 |
-| @sortedset | 0 | 32 |
+| @sortedset | 32 | 32 |
 | @stream | 0 | 15 |
 | @string | 12 | 22 |
 | @transaction | 5 | 5 |
@@ -38,38 +38,6 @@ Implemented: 112 / 236
 - `setrange`
 - `getrange`
 - `substr`
-- `zadd`
-- `zincrby`
-- `zrem`
-- `zremrangebyscore`
-- `zremrangebyrank`
-- `zremrangebylex`
-- `zunionstore`
-- `zinterstore`
-- `zdiffstore`
-- `zunion`
-- `zinter`
-- `zdiff`
-- `zrange`
-- `zrangestore`
-- `zrangebyscore`
-- `zrevrangebyscore`
-- `zrangebylex`
-- `zrevrangebylex`
-- `zcount`
-- `zlexcount`
-- `zrevrange`
-- `zcard`
-- `zscore`
-- `zmscore`
-- `zrank`
-- `zrevrank`
-- `zscan`
-- `zpopmin`
-- `zpopmax`
-- `bzpopmin`
-- `bzpopmax`
-- `zrandmember`
 - `incrbyfloat`
 - `msetnx`
 - `swapdb`

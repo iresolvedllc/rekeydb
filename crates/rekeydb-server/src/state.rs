@@ -48,6 +48,7 @@ pub enum ListSide {
 pub enum BlockKind {
     Pop,
     Move,
+    ZPop { max: bool },
 }
 
 /// A client waiting for data on one or more list keys.
@@ -353,7 +354,7 @@ impl State {
                 let outcome = self.execute(&command, client);
                 if let Some(block) = outcome.block {
                     replies.push(match block.kind {
-                        BlockKind::Pop => RespValue::NullArray,
+                        BlockKind::Pop | BlockKind::ZPop { .. } => RespValue::NullArray,
                         BlockKind::Move => RespValue::null(),
                     });
                 } else {
@@ -572,6 +573,15 @@ impl State {
             "BLPOP" | "BRPOP" => self.cmd_bpop(&name, args, client.db),
             "BRPOPLPUSH" => self.cmd_brpoplpush(args, client.db),
             "BLMOVE" => self.cmd_blmove(args, client.db),
+            "ZADD" | "ZINCRBY" | "ZREM" | "ZREMRANGEBYSCORE" | "ZREMRANGEBYRANK"
+            | "ZREMRANGEBYLEX" | "ZUNIONSTORE" | "ZINTERSTORE" | "ZDIFFSTORE" | "ZUNION"
+            | "ZINTER" | "ZDIFF" | "ZRANGE" | "ZRANGESTORE" | "ZRANGEBYSCORE"
+            | "ZREVRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYLEX" | "ZCOUNT" | "ZLEXCOUNT"
+            | "ZREVRANGE" | "ZCARD" | "ZSCORE" | "ZMSCORE" | "ZRANK" | "ZREVRANK" | "ZSCAN"
+            | "ZPOPMIN" | "ZPOPMAX" | "ZRANDMEMBER" => {
+                self.cmd_zset(&name, args, client.db, client.version)
+            }
+            "BZPOPMIN" | "BZPOPMAX" => self.cmd_bzpop(&name, args, client.db),
             "KEYDB.HRENAME" => self.cmd_hrename(args, client.db),
             "HSET" | "HSETNX" | "HMSET" | "HGET" | "HMGET" | "HDEL" | "HLEN" | "HSTRLEN"
             | "HKEYS" | "HVALS" | "HGETALL" | "HEXISTS" | "HINCRBY" | "HINCRBYFLOAT"
@@ -1563,6 +1573,24 @@ impl State {
                 }
                 None
             }
+            BlockKind::ZPop { max } => {
+                for key in &request.keys {
+                    if let Ok(Some(zset)) = self.get_zset(request.db, key) {
+                        if zset.scores.is_empty() {
+                            continue;
+                        }
+                        let members = sorted_members(&zset, max);
+                        let (member, score) = &members[0];
+                        self.remove_zset_members(request.db, key, std::slice::from_ref(member));
+                        return Some(RespValue::Array(vec![
+                            RespValue::bulk(key.clone()),
+                            RespValue::bulk(member.clone()),
+                            score_value(*score, RespVersion::V2),
+                        ]));
+                    }
+                }
+                None
+            }
             BlockKind::Move => {
                 let destination = request.destination.as_ref()?;
                 match self.list_move(
@@ -1707,6 +1735,1032 @@ impl State {
         };
         hash.insert(args[3].clone(), value);
         Outcome::reply(RespValue::Integer(1))
+    }
+
+    fn cmd_zset(
+        &mut self,
+        command: &str,
+        args: &[Vec<u8>],
+        db_index: usize,
+        version: RespVersion,
+    ) -> Outcome {
+        match command {
+            "ZADD" => self.cmd_zadd(args, db_index, version),
+            "ZINCRBY" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let Some(increment) = parse_score(&args[2]) else {
+                    return Outcome::error("ERR value is not a valid float");
+                };
+                let member = &args[3];
+                let current = match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => zset.scores.get(member).copied().unwrap_or(0.0),
+                    Ok(None) => 0.0,
+                    Err(outcome) => return outcome,
+                };
+                let score = current + increment;
+                if score.is_nan() {
+                    return Outcome::error("ERR resulting score is not a number (NaN)");
+                }
+                let mvcc = self.clock.next(self.now_ms());
+                let zset = match self.zset_for_write(db_index, &args[1], mvcc) {
+                    Ok(zset) => zset,
+                    Err(outcome) => return outcome,
+                };
+                zset.scores.insert(member.clone(), score);
+                let mut outcome = Outcome::reply(score_value(score, version));
+                outcome.wake.push((db_index, args[1].clone()));
+                outcome
+            }
+            "ZREM" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(_)) => Outcome::reply(RespValue::Integer(self.remove_zset_members(
+                        db_index,
+                        &args[1],
+                        &args[2..],
+                    ) as i64)),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZCARD" => {
+                if args.len() != 2 {
+                    return wrong_args(args);
+                }
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => Outcome::reply(RespValue::Integer(zset.scores.len() as i64)),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZSCORE" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => match zset.scores.get(&args[2]) {
+                        Some(score) => Outcome::reply(score_value(*score, version)),
+                        None => Outcome::reply(RespValue::null()),
+                    },
+                    Ok(None) => Outcome::reply(RespValue::null()),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZMSCORE" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => Outcome::reply(RespValue::Array(
+                        args[2..]
+                            .iter()
+                            .map(|member| match zset.scores.get(member) {
+                                Some(score) => score_value(*score, version),
+                                None => RespValue::null(),
+                            })
+                            .collect(),
+                    )),
+                    Ok(None) => Outcome::reply(RespValue::Array(
+                        args[2..].iter().map(|_| RespValue::null()).collect(),
+                    )),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZRANK" | "ZREVRANK" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => {
+                        let members = sorted_members(&zset, command == "ZREVRANK");
+                        match members.iter().position(|(member, _)| member == &args[2]) {
+                            Some(index) => Outcome::reply(RespValue::Integer(index as i64)),
+                            None => Outcome::reply(RespValue::null()),
+                        }
+                    }
+                    Ok(None) => Outcome::reply(RespValue::null()),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZCOUNT" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let Some(min) = parse_score_bound(&args[2]) else {
+                    return Outcome::error("ERR min or max is not a float");
+                };
+                let Some(max) = parse_score_bound(&args[3]) else {
+                    return Outcome::error("ERR min or max is not a float");
+                };
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => Outcome::reply(RespValue::Integer(
+                        zset.scores
+                            .values()
+                            .filter(|score| score_in_range(**score, min, max))
+                            .count() as i64,
+                    )),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZLEXCOUNT" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let Some(min) = parse_lex_bound(&args[2]) else {
+                    return Outcome::error("ERR min or max not valid string range item");
+                };
+                let Some(max) = parse_lex_bound(&args[3]) else {
+                    return Outcome::error("ERR min or max not valid string range item");
+                };
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => Outcome::reply(RespValue::Integer(
+                        zset.scores
+                            .keys()
+                            .filter(|member| lex_in_range(member, &min, &max))
+                            .count() as i64,
+                    )),
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZRANGE" | "ZREVRANGE" | "ZRANGEBYSCORE" | "ZREVRANGEBYSCORE" | "ZRANGEBYLEX"
+            | "ZREVRANGEBYLEX" => self.cmd_zrange(command, args, db_index, version, None),
+            "ZRANGESTORE" => {
+                if args.len() < 5 {
+                    return wrong_args(args);
+                }
+                self.cmd_zrange(
+                    command,
+                    &args[1..],
+                    db_index,
+                    version,
+                    Some(args[1].clone()),
+                )
+            }
+            "ZREMRANGEBYRANK" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let (Ok(start), Ok(stop)) = (parse_i64(&args[2]), parse_i64(&args[3])) else {
+                    return Outcome::error("ERR value is not an integer or out of range");
+                };
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => {
+                        let members = sorted_members(&zset, false);
+                        let Some((start, stop)) = normalize_range(members.len(), start, stop)
+                        else {
+                            return Outcome::reply(RespValue::Integer(0));
+                        };
+                        let keys: Vec<Vec<u8>> = members[start..=stop]
+                            .iter()
+                            .map(|(member, _)| member.clone())
+                            .collect();
+                        Outcome::reply(RespValue::Integer(
+                            self.remove_zset_members(db_index, &args[1], &keys) as i64,
+                        ))
+                    }
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZREMRANGEBYSCORE" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let Some(min) = parse_score_bound(&args[2]) else {
+                    return Outcome::error("ERR min or max is not a float");
+                };
+                let Some(max) = parse_score_bound(&args[3]) else {
+                    return Outcome::error("ERR min or max is not a float");
+                };
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => {
+                        let keys: Vec<Vec<u8>> = zset
+                            .scores
+                            .iter()
+                            .filter(|(_, score)| score_in_range(**score, min, max))
+                            .map(|(member, _)| member.clone())
+                            .collect();
+                        Outcome::reply(RespValue::Integer(
+                            self.remove_zset_members(db_index, &args[1], &keys) as i64,
+                        ))
+                    }
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZREMRANGEBYLEX" => {
+                if args.len() != 4 {
+                    return wrong_args(args);
+                }
+                let Some(min) = parse_lex_bound(&args[2]) else {
+                    return Outcome::error("ERR min or max not valid string range item");
+                };
+                let Some(max) = parse_lex_bound(&args[3]) else {
+                    return Outcome::error("ERR min or max not valid string range item");
+                };
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => {
+                        let keys: Vec<Vec<u8>> = zset
+                            .scores
+                            .keys()
+                            .filter(|member| lex_in_range(member, &min, &max))
+                            .cloned()
+                            .collect();
+                        Outcome::reply(RespValue::Integer(
+                            self.remove_zset_members(db_index, &args[1], &keys) as i64,
+                        ))
+                    }
+                    Ok(None) => Outcome::reply(RespValue::Integer(0)),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZPOPMIN" | "ZPOPMAX" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return wrong_args(args);
+                }
+                let count = if args.len() == 3 {
+                    match parse_i64(&args[2]) {
+                        Ok(value) if value > 0 => Some(value as usize),
+                        _ => return Outcome::reply(RespValue::Array(Vec::new())),
+                    }
+                } else {
+                    None
+                };
+                let max = command == "ZPOPMAX";
+                match self.get_zset(db_index, &args[1]) {
+                    Ok(Some(zset)) => {
+                        let members = sorted_members(&zset, max);
+                        let take = count.unwrap_or(1).min(members.len());
+                        let selected: Vec<(Vec<u8>, f64)> =
+                            members.into_iter().take(take).collect();
+                        if !selected.is_empty() {
+                            let keys: Vec<Vec<u8>> =
+                                selected.iter().map(|(member, _)| member.clone()).collect();
+                            self.remove_zset_members(db_index, &args[1], &keys);
+                        }
+                        Outcome::reply(zset_pop_reply(&selected, count.is_some(), version))
+                    }
+                    Ok(None) => Outcome::reply(RespValue::Array(Vec::new())),
+                    Err(outcome) => outcome,
+                }
+            }
+            "ZRANDMEMBER" => self.cmd_zrandmember(args, db_index, version),
+            "ZSCAN" => self.cmd_zscan(args, db_index, version),
+            "ZUNION" | "ZINTER" | "ZDIFF" => self.cmd_zsetop(command, args, db_index, version),
+            "ZUNIONSTORE" | "ZINTERSTORE" | "ZDIFFSTORE" => {
+                self.cmd_zsetop(command, args, db_index, version)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn cmd_zadd(&mut self, args: &[Vec<u8>], db_index: usize, version: RespVersion) -> Outcome {
+        if args.len() < 4 {
+            return wrong_args(args);
+        }
+        let mut nx = false;
+        let mut xx = false;
+        let mut gt = false;
+        let mut lt = false;
+        let mut ch = false;
+        let mut incr = false;
+        let mut index = 2;
+        while index < args.len() {
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "NX" => nx = true,
+                "XX" => xx = true,
+                "GT" => gt = true,
+                "LT" => lt = true,
+                "CH" => ch = true,
+                "INCR" => incr = true,
+                _ => break,
+            }
+            index += 1;
+        }
+        if nx && xx {
+            return Outcome::error("ERR XX and NX options at the same time are not compatible");
+        }
+        if gt && lt {
+            return Outcome::error(
+                "ERR GT, LT, and/or NX options at the same time are not compatible",
+            );
+        }
+        if nx && (gt || lt) {
+            return Outcome::error(
+                "ERR GT, LT, and/or NX options at the same time are not compatible",
+            );
+        }
+        let pairs = &args[index..];
+        if pairs.is_empty() || !pairs.len().is_multiple_of(2) {
+            return Outcome::error("ERR syntax error");
+        }
+        if incr && pairs.len() != 2 {
+            return Outcome::error("ERR INCR option supports a single increment-element pair");
+        }
+        let existing = match self.get_zset(db_index, &args[1]) {
+            Ok(existing) => existing,
+            Err(outcome) => return outcome,
+        };
+        if existing.is_none() && xx {
+            return Outcome::reply(if incr {
+                RespValue::null()
+            } else {
+                RespValue::Integer(0)
+            });
+        }
+
+        // Parse and validate every pair before creating the key, so a single
+        // bad score does not leave a partially modified sorted set behind.
+        let mut requested = Vec::with_capacity(pairs.len() / 2);
+        for pair in pairs.chunks(2) {
+            let Some(score) = parse_score(&pair[0]) else {
+                return Outcome::error("ERR value is not a valid float");
+            };
+            let old = existing
+                .as_ref()
+                .and_then(|zset| zset.scores.get(&pair[1]).copied());
+            let new_score = if incr {
+                match old {
+                    Some(old) => old + score,
+                    None => score,
+                }
+            } else {
+                score
+            };
+            if new_score.is_nan() {
+                return Outcome::error("ERR value is not a valid float");
+            }
+            requested.push((pair[1].clone(), old, new_score));
+        }
+
+        let mvcc = self.clock.next(self.now_ms());
+        let zset = match self.zset_for_write(db_index, &args[1], mvcc) {
+            Ok(zset) => zset,
+            Err(outcome) => return outcome,
+        };
+        let mut added = 0i64;
+        let mut changed = 0i64;
+        let mut incr_result = None;
+        for (member, old, new_score) in requested {
+            match old {
+                Some(old) => {
+                    if nx {
+                        continue;
+                    }
+                    if (gt && new_score <= old) || (lt && new_score >= old) {
+                        continue;
+                    }
+                    if new_score != old {
+                        zset.scores.insert(member, new_score);
+                        changed += 1;
+                    }
+                    if incr {
+                        incr_result = Some(new_score);
+                    }
+                }
+                None => {
+                    if xx {
+                        continue;
+                    }
+                    zset.scores.insert(member, new_score);
+                    added += 1;
+                    changed += 1;
+                    if incr {
+                        incr_result = Some(new_score);
+                    }
+                }
+            }
+        }
+        let mut outcome = if incr {
+            match incr_result {
+                Some(score) => Outcome::reply(score_value(score, version)),
+                None => Outcome::reply(RespValue::null()),
+            }
+        } else {
+            Outcome::reply(RespValue::Integer(if ch { changed } else { added }))
+        };
+        if added > 0 || changed > 0 {
+            outcome.wake.push((db_index, args[1].clone()));
+        }
+        outcome
+    }
+
+    fn cmd_zrange(
+        &mut self,
+        command: &str,
+        args: &[Vec<u8>],
+        db_index: usize,
+        version: RespVersion,
+        store: Option<Vec<u8>>,
+    ) -> Outcome {
+        if args.len() < 4 {
+            return wrong_args(args);
+        }
+        let key_index = 1;
+        let start_index = key_index + 1;
+        let stop_index = key_index + 2;
+        let source = &args[key_index];
+        let mut with_scores = false;
+        let mut by_score = command.contains("BYSCORE");
+        let mut by_lex = command.contains("BYLEX");
+        let mut rev = command.starts_with("ZREV");
+        let legacy_rev = command == "ZREVRANGE";
+        let legacy_score = matches!(command, "ZRANGEBYSCORE" | "ZREVRANGEBYSCORE");
+        let legacy_lex = matches!(command, "ZRANGEBYLEX" | "ZREVRANGEBYLEX");
+        let mut limit: Option<(usize, usize)> = None;
+        let mut index = stop_index + 1;
+        while index < args.len() {
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "WITHSCORES" => {
+                    if legacy_lex || store.is_some() {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    with_scores = true;
+                    index += 1;
+                }
+                "BYSCORE" => {
+                    if legacy_rev || legacy_score || legacy_lex {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    by_score = true;
+                    index += 1;
+                }
+                "BYLEX" => {
+                    if legacy_rev || legacy_score || legacy_lex {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    by_lex = true;
+                    index += 1;
+                }
+                "REV" => {
+                    if legacy_rev || legacy_score || legacy_lex {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    rev = true;
+                    index += 1;
+                }
+                "LIMIT" => {
+                    if legacy_rev {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    let Some(offset) = args.get(index + 1) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    let Some(count) = args.get(index + 2) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    let (Ok(offset), Ok(count)) = (parse_i64(offset), parse_i64(count)) else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    if offset < 0 {
+                        return Outcome::error("ERR offset is out of range");
+                    }
+                    limit = Some((offset as usize, count.max(0) as usize));
+                    index += 3;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        if !by_score && !by_lex && with_scores && store.is_some() {
+            return Outcome::error("ERR syntax error");
+        }
+        if by_lex && with_scores {
+            return Outcome::error("ERR syntax error");
+        }
+        if !by_score && !by_lex && limit.is_some() {
+            return Outcome::error("ERR syntax error");
+        }
+        if legacy_rev && (by_score || by_lex) {
+            return Outcome::error("ERR syntax error");
+        }
+        // Validate the range arguments even when the source key is missing.
+        if by_lex {
+            let (min_arg, max_arg) = if rev {
+                (&args[stop_index], &args[start_index])
+            } else {
+                (&args[start_index], &args[stop_index])
+            };
+            if parse_lex_bound(min_arg).is_none() || parse_lex_bound(max_arg).is_none() {
+                return Outcome::error("ERR min or max not valid string range item");
+            }
+        } else if by_score {
+            let (min_arg, max_arg) = if rev {
+                (&args[stop_index], &args[start_index])
+            } else {
+                (&args[start_index], &args[stop_index])
+            };
+            if parse_score_bound(min_arg).is_none() || parse_score_bound(max_arg).is_none() {
+                return Outcome::error("ERR min or max is not a float");
+            }
+        } else if parse_i64(&args[start_index]).is_err() || parse_i64(&args[stop_index]).is_err() {
+            return Outcome::error("ERR value is not an integer or out of range");
+        }
+        let zset = match self.get_zset(db_index, source) {
+            Ok(Some(zset)) => zset,
+            Ok(None) => {
+                if let Some(destination) = store {
+                    self.dbs[db_index].remove(&destination);
+                    return Outcome::reply(RespValue::Integer(0));
+                }
+                return Outcome::reply(RespValue::Array(Vec::new()));
+            }
+            Err(outcome) => return outcome,
+        };
+        let mut selected: Vec<(Vec<u8>, f64)>;
+        if by_lex {
+            let (min_arg, max_arg) = if rev {
+                (&args[stop_index], &args[start_index])
+            } else {
+                (&args[start_index], &args[stop_index])
+            };
+            let Some(min) = parse_lex_bound(min_arg) else {
+                return Outcome::error("ERR min or max not valid string range item");
+            };
+            let Some(max) = parse_lex_bound(max_arg) else {
+                return Outcome::error("ERR min or max not valid string range item");
+            };
+            selected = zset
+                .scores
+                .iter()
+                .filter(|(member, _)| lex_in_range(member, &min, &max))
+                .map(|(member, score)| (member.clone(), *score))
+                .collect();
+            selected.sort_by(|a, b| a.0.cmp(&b.0));
+        } else if by_score {
+            let (min_arg, max_arg) = if rev {
+                (&args[stop_index], &args[start_index])
+            } else {
+                (&args[start_index], &args[stop_index])
+            };
+            let Some(min) = parse_score_bound(min_arg) else {
+                return Outcome::error("ERR min or max is not a float");
+            };
+            let Some(max) = parse_score_bound(max_arg) else {
+                return Outcome::error("ERR min or max is not a float");
+            };
+            selected = sorted_members(&zset, false)
+                .into_iter()
+                .filter(|(_, score)| score_in_range(*score, min, max))
+                .collect();
+        } else {
+            let (Ok(start), Ok(stop)) =
+                (parse_i64(&args[start_index]), parse_i64(&args[stop_index]))
+            else {
+                return Outcome::error("ERR value is not an integer or out of range");
+            };
+            let members = sorted_members(&zset, rev);
+            selected = match normalize_range(members.len(), start, stop) {
+                Some((start, stop)) => members[start..=stop].to_vec(),
+                None => Vec::new(),
+            };
+        }
+        if by_lex || by_score {
+            if rev {
+                selected.reverse();
+            }
+            if let Some((offset, count)) = limit {
+                selected = selected.into_iter().skip(offset).take(count).collect();
+            }
+        }
+        if let Some(destination) = store {
+            let mvcc = self.clock.next(self.now_ms());
+            let length = selected.len() as i64;
+            if selected.is_empty() {
+                self.dbs[db_index].remove(&destination);
+            } else {
+                let mut zset = rekeydb_core::SortedSet::default();
+                for (member, score) in selected {
+                    zset.scores.insert(member, score);
+                }
+                self.dbs[db_index].insert(&destination, Value::ZSet(zset), mvcc);
+            }
+            let mut outcome = Outcome::reply(RespValue::Integer(length));
+            outcome.wake.push((db_index, destination));
+            outcome
+        } else {
+            let mut values = Vec::new();
+            for (member, score) in selected {
+                if with_scores && version == RespVersion::V3 {
+                    values.push(RespValue::Array(vec![
+                        RespValue::bulk(member),
+                        score_value(score, version),
+                    ]));
+                } else {
+                    values.push(RespValue::bulk(member));
+                    if with_scores {
+                        values.push(score_value(score, version));
+                    }
+                }
+            }
+            Outcome::reply(RespValue::Array(values))
+        }
+    }
+
+    fn cmd_zrandmember(
+        &mut self,
+        args: &[Vec<u8>],
+        db_index: usize,
+        version: RespVersion,
+    ) -> Outcome {
+        if args.len() < 2 || args.len() > 4 {
+            return wrong_args(args);
+        }
+        let with_scores = args
+            .get(3)
+            .is_some_and(|option| option.eq_ignore_ascii_case(b"WITHSCORES"));
+        if args.len() == 4 && !with_scores {
+            return Outcome::error("ERR syntax error");
+        }
+        let count = if args.len() >= 3 {
+            match parse_i64(&args[2]) {
+                Ok(value) => Some(value),
+                Err(_) => return Outcome::error("ERR value is not an integer or out of range"),
+            }
+        } else {
+            None
+        };
+        if count.is_some_and(|count| count.unsigned_abs() > 1_000_000) {
+            return Outcome::error("ERR value is out of range");
+        }
+        let zset = match self.get_zset(db_index, &args[1]) {
+            Ok(Some(zset)) => zset,
+            Ok(None) => {
+                return if count.is_none() {
+                    Outcome::reply(RespValue::null())
+                } else {
+                    Outcome::reply(RespValue::Array(Vec::new()))
+                };
+            }
+            Err(outcome) => return outcome,
+        };
+        let members = sorted_members(&zset, false);
+        let Some(count) = count else {
+            let seed = self.now_ms().unsigned_abs() ^ fnv1a(&args[1]);
+            let (member, score) = &members[(seed as usize) % members.len()];
+            return Outcome::reply(if with_scores {
+                RespValue::Array(vec![
+                    RespValue::bulk(member.clone()),
+                    score_value(*score, version),
+                ])
+            } else {
+                RespValue::bulk(member.clone())
+            });
+        };
+        if count == 0 {
+            return Outcome::reply(RespValue::Array(Vec::new()));
+        }
+        let take = count.unsigned_abs() as usize;
+        let seed = self.now_ms().unsigned_abs() ^ fnv1a(&args[1]);
+        let mut selected = Vec::new();
+        if count > 0 {
+            let take = take.min(members.len());
+            let start = (seed as usize) % members.len();
+            for offset in 0..take {
+                selected.push(members[(start + offset) % members.len()].clone());
+            }
+        } else {
+            for offset in 0..take {
+                selected.push(members[(seed as usize + offset) % members.len()].clone());
+            }
+        }
+        let mut values = Vec::new();
+        for (member, score) in selected {
+            if with_scores && version == RespVersion::V3 {
+                values.push(RespValue::Array(vec![
+                    RespValue::bulk(member),
+                    score_value(score, version),
+                ]));
+            } else {
+                values.push(RespValue::bulk(member));
+                if with_scores {
+                    values.push(score_value(score, version));
+                }
+            }
+        }
+        Outcome::reply(RespValue::Array(values))
+    }
+
+    fn cmd_zscan(&mut self, args: &[Vec<u8>], db_index: usize, version: RespVersion) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let Ok(cursor) = parse_usize(&args[2]) else {
+            return Outcome::error("ERR invalid cursor");
+        };
+        let mut count = 10usize;
+        let mut pattern: Option<&[u8]> = None;
+        let mut index = 3;
+        while index < args.len() {
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "MATCH" => {
+                    let Some(value) = args.get(index + 1) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    pattern = Some(value);
+                    index += 2;
+                }
+                "COUNT" => {
+                    let Some(value) = args.get(index + 1) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    let Ok(value) = parse_usize(value) else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    count = value.max(1);
+                    index += 2;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        let zset = match self.get_zset(db_index, &args[1]) {
+            Ok(Some(zset)) => zset,
+            Ok(None) => {
+                return Outcome::reply(RespValue::Array(vec![
+                    RespValue::bulk(b"0".to_vec()),
+                    RespValue::Array(Vec::new()),
+                ]));
+            }
+            Err(outcome) => return outcome,
+        };
+        let members: Vec<(Vec<u8>, f64)> = sorted_members(&zset, false)
+            .into_iter()
+            .filter(|(member, _)| pattern.is_none_or(|pattern| glob_match(pattern, member)))
+            .collect();
+        let start = cursor.min(members.len());
+        let end = start.saturating_add(count).min(members.len());
+        let next = if end >= members.len() { 0 } else { end };
+        let mut values = Vec::new();
+        for (member, score) in &members[start..end] {
+            values.push(RespValue::bulk(member.clone()));
+            values.push(score_value(*score, version));
+        }
+        Outcome::reply(RespValue::Array(vec![
+            RespValue::bulk(next.to_string().into_bytes()),
+            RespValue::Array(values),
+        ]))
+    }
+
+    fn cmd_zsetop(
+        &mut self,
+        command: &str,
+        args: &[Vec<u8>],
+        db_index: usize,
+        version: RespVersion,
+    ) -> Outcome {
+        let store = command.ends_with("STORE");
+        let base = if store { 2 } else { 1 };
+        if args.len() <= base {
+            return wrong_args(args);
+        }
+        let Ok(numkeys) = parse_usize(&args[base]) else {
+            return Outcome::error("ERR value is not an integer or out of range");
+        };
+        if numkeys == 0 || args.len() < base + 1 + numkeys {
+            return Outcome::error("ERR at least 1 input key is needed for this command");
+        }
+        let mut weights = vec![1.0f64; numkeys];
+        let mut aggregate = "SUM".to_string();
+        let mut with_scores = false;
+        let mut index = base + 1 + numkeys;
+        while index < args.len() {
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "WEIGHTS" => {
+                    if index + numkeys >= args.len() {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    for offset in 0..numkeys {
+                        let Some(weight) = parse_score(&args[index + 1 + offset]) else {
+                            return Outcome::error("ERR weight value is not a float");
+                        };
+                        weights[offset] = weight;
+                    }
+                    index += 1 + numkeys;
+                }
+                "AGGREGATE" => {
+                    let Some(value) = args.get(index + 1) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    let value = String::from_utf8_lossy(value).to_ascii_uppercase();
+                    if !matches!(value.as_str(), "SUM" | "MIN" | "MAX") {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    aggregate = value;
+                    index += 2;
+                }
+                "WITHSCORES" => {
+                    if store {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    with_scores = true;
+                    index += 1;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        let keys: Vec<&Vec<u8>> = args[base + 1..base + 1 + numkeys].iter().collect();
+        let mut sets = Vec::new();
+        for key in &keys {
+            match self.get_zset_input(db_index, key) {
+                Ok(zset) => sets.push(zset.unwrap_or_default()),
+                Err(outcome) => return outcome,
+            }
+        }
+        let operation = command.trim_end_matches("STORE");
+        let mut result = std::collections::HashMap::new();
+        if operation == "ZDIFF" {
+            if let Some(first) = sets.first() {
+                result = first.scores.clone();
+                for set in &sets[1..] {
+                    result.retain(|member, _| !set.scores.contains_key(member));
+                }
+            }
+        } else {
+            for (index, set) in sets.iter().enumerate() {
+                for (member, score) in &set.scores {
+                    let mut weighted = score * weights[index];
+                    if weighted.is_nan() {
+                        weighted = 0.0;
+                    }
+                    if operation == "ZUNION" {
+                        result
+                            .entry(member.clone())
+                            .and_modify(|existing: &mut f64| {
+                                *existing = aggregate_score(*existing, weighted, &aggregate);
+                            })
+                            .or_insert(weighted);
+                    } else if index == 0 || result.contains_key(member) {
+                        result
+                            .entry(member.clone())
+                            .and_modify(|existing: &mut f64| {
+                                *existing = aggregate_score(*existing, weighted, &aggregate);
+                            })
+                            .or_insert(weighted);
+                    }
+                }
+            }
+            if operation == "ZINTER" {
+                for set in &sets[1..] {
+                    result.retain(|member, _| set.scores.contains_key(member));
+                }
+            }
+        }
+        if store {
+            let destination = &args[1];
+            let mvcc = self.clock.next(self.now_ms());
+            let length = result.len() as i64;
+            if result.is_empty() {
+                self.dbs[db_index].remove(destination);
+            } else {
+                let zset = rekeydb_core::SortedSet { scores: result };
+                self.dbs[db_index].insert(destination, Value::ZSet(zset), mvcc);
+            }
+            let mut outcome = Outcome::reply(RespValue::Integer(length));
+            outcome.wake.push((db_index, destination.clone()));
+            outcome
+        } else {
+            let zset = rekeydb_core::SortedSet { scores: result };
+            let mut values = Vec::new();
+            for (member, score) in sorted_members(&zset, false) {
+                if with_scores && version == RespVersion::V3 {
+                    values.push(RespValue::Array(vec![
+                        RespValue::bulk(member),
+                        score_value(score, version),
+                    ]));
+                } else {
+                    values.push(RespValue::bulk(member));
+                    if with_scores {
+                        values.push(score_value(score, version));
+                    }
+                }
+            }
+            Outcome::reply(RespValue::Array(values))
+        }
+    }
+
+    fn get_zset_input(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+    ) -> Result<Option<rekeydb_core::SortedSet>, Outcome> {
+        self.expire_if_needed(db_index, key);
+        match self.dbs[db_index].get(key) {
+            Some(entry) => match entry.value.as_ref() {
+                Value::ZSet(zset) => Ok(Some(zset.clone())),
+                Value::Set(set) => {
+                    let mut zset = rekeydb_core::SortedSet::default();
+                    for member in set {
+                        zset.scores.insert(member.clone(), 1.0);
+                    }
+                    Ok(Some(zset))
+                }
+                _ => Err(wrong_type()),
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn get_zset(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+    ) -> Result<Option<rekeydb_core::SortedSet>, Outcome> {
+        self.expire_if_needed(db_index, key);
+        match self.dbs[db_index].get(key) {
+            Some(entry) => match entry.value.as_zset() {
+                Some(zset) => Ok(Some(zset.clone())),
+                None => Err(wrong_type()),
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn zset_for_write(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+        mvcc: u64,
+    ) -> Result<&mut rekeydb_core::SortedSet, Outcome> {
+        if !self.dbs[db_index].contains_key(key) {
+            self.dbs[db_index].insert(key, Value::ZSet(rekeydb_core::SortedSet::default()), mvcc);
+        }
+        let Some(entry) = self.dbs[db_index].get_mut(key) else {
+            return Err(wrong_type());
+        };
+        entry.mvcc = mvcc;
+        let value = Arc::make_mut(&mut entry.value);
+        match value {
+            Value::ZSet(zset) => Ok(zset),
+            _ => Err(wrong_type()),
+        }
+    }
+
+    fn remove_zset_members(&mut self, db_index: usize, key: &[u8], members: &[Vec<u8>]) -> usize {
+        let mvcc = self.clock.next(self.now_ms());
+        let mut removed = 0;
+        let mut empty = false;
+        if let Some(entry) = self.dbs[db_index].get_mut(key) {
+            entry.mvcc = mvcc;
+            let value = Arc::make_mut(&mut entry.value);
+            if let Value::ZSet(zset) = value {
+                for member in members {
+                    if zset.scores.remove(member).is_some() {
+                        removed += 1;
+                    }
+                }
+                empty = zset.scores.is_empty();
+            }
+        }
+        if empty {
+            self.dbs[db_index].remove(key);
+        }
+        removed
+    }
+
+    fn cmd_bzpop(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let timeout_ms = match parse_timeout(args.last().expect("timeout")) {
+            Ok(timeout) => timeout,
+            Err(outcome) => return outcome,
+        };
+        let max = command == "BZPOPMAX";
+        let keys = &args[1..args.len() - 1];
+        for key in keys {
+            match self.get_zset(db_index, key) {
+                Ok(Some(zset)) if !zset.scores.is_empty() => {
+                    let members = sorted_members(&zset, max);
+                    let (member, score) = &members[0];
+                    self.remove_zset_members(db_index, key, std::slice::from_ref(member));
+                    return Outcome::reply(RespValue::Array(vec![
+                        RespValue::bulk(key.clone()),
+                        RespValue::bulk(member.clone()),
+                        RespValue::bulk(format_float(*score).into_bytes()),
+                    ]));
+                }
+                Ok(_) => {}
+                Err(outcome) => return outcome,
+            }
+        }
+        Outcome::blocked(BlockRequest {
+            db: db_index,
+            keys: keys.to_vec(),
+            kind: BlockKind::ZPop { max },
+            source_side: ListSide::Left,
+            destination: None,
+            destination_side: ListSide::Left,
+            timeout_ms,
+        })
     }
 
     fn cmd_hash(
@@ -3481,20 +4535,143 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ScoreBound {
+    value: f64,
+    inclusive: bool,
+}
+
+#[derive(Debug, Clone)]
+enum LexBound {
+    NegInf,
+    PosInf,
+    Included(Vec<u8>),
+    Excluded(Vec<u8>),
+}
+
+fn parse_score(value: &[u8]) -> Option<f64> {
+    let text = std::str::from_utf8(value).ok()?;
+    let score = match text.to_ascii_lowercase().as_str() {
+        "inf" | "+inf" => f64::INFINITY,
+        "-inf" => f64::NEG_INFINITY,
+        _ => text.parse::<f64>().ok()?,
+    };
+    (!score.is_nan()).then_some(score)
+}
+
+fn parse_score_bound(value: &[u8]) -> Option<ScoreBound> {
+    if let Some(rest) = value.strip_prefix(b"(") {
+        Some(ScoreBound {
+            value: parse_score(rest)?,
+            inclusive: false,
+        })
+    } else {
+        let rest = value.strip_prefix(b"[").unwrap_or(value);
+        Some(ScoreBound {
+            value: parse_score(rest)?,
+            inclusive: true,
+        })
+    }
+}
+
+fn score_in_range(score: f64, min: ScoreBound, max: ScoreBound) -> bool {
+    let above = score > min.value || (min.inclusive && score == min.value);
+    let below = score < max.value || (max.inclusive && score == max.value);
+    above && below
+}
+
+fn parse_lex_bound(value: &[u8]) -> Option<LexBound> {
+    match value.first().copied() {
+        Some(b'-') if value.len() == 1 => Some(LexBound::NegInf),
+        Some(b'+') if value.len() == 1 => Some(LexBound::PosInf),
+        Some(b'[') => Some(LexBound::Included(value[1..].to_vec())),
+        Some(b'(') => Some(LexBound::Excluded(value[1..].to_vec())),
+        _ => None,
+    }
+}
+
+fn lex_in_range(member: &[u8], min: &LexBound, max: &LexBound) -> bool {
+    let above = match min {
+        LexBound::NegInf => true,
+        LexBound::PosInf => false,
+        LexBound::Included(value) => member >= value.as_slice(),
+        LexBound::Excluded(value) => member > value.as_slice(),
+    };
+    let below = match max {
+        LexBound::PosInf => true,
+        LexBound::NegInf => false,
+        LexBound::Included(value) => member <= value.as_slice(),
+        LexBound::Excluded(value) => member < value.as_slice(),
+    };
+    above && below
+}
+
+fn sorted_members(zset: &rekeydb_core::SortedSet, reverse: bool) -> Vec<(Vec<u8>, f64)> {
+    let mut members: Vec<(Vec<u8>, f64)> = zset
+        .scores
+        .iter()
+        .map(|(member, score)| (member.clone(), *score))
+        .collect();
+    members.sort_by(|left, right| {
+        left.1
+            .partial_cmp(&right.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    if reverse {
+        members.reverse();
+    }
+    members
+}
+
+fn score_value(score: f64, version: RespVersion) -> RespValue {
+    if version == RespVersion::V3 {
+        RespValue::Double(score)
+    } else {
+        RespValue::bulk(format_float(score).into_bytes())
+    }
+}
+
+fn zset_pop_reply(
+    selected: &[(Vec<u8>, f64)],
+    count_given: bool,
+    version: RespVersion,
+) -> RespValue {
+    if selected.is_empty() {
+        return RespValue::Array(Vec::new());
+    }
+    if count_given && version == RespVersion::V3 {
+        return RespValue::Array(
+            selected
+                .iter()
+                .map(|(member, score)| {
+                    RespValue::Array(vec![
+                        RespValue::bulk(member.clone()),
+                        score_value(*score, version),
+                    ])
+                })
+                .collect(),
+        );
+    }
+    let mut values = Vec::new();
+    for (member, score) in selected {
+        values.push(RespValue::bulk(member.clone()));
+        values.push(score_value(*score, version));
+    }
+    RespValue::Array(values)
+}
+
+fn aggregate_score(existing: f64, incoming: f64, aggregate: &str) -> f64 {
+    let result = match aggregate {
+        "MIN" => existing.min(incoming),
+        "MAX" => existing.max(incoming),
+        _ => existing + incoming,
+    };
+    if result.is_nan() { 0.0 } else { result }
+}
+
 fn format_float(value: f64) -> String {
-    let mut text = format!("{value}");
-    if text.contains('e') || text.contains('E') {
-        return text;
-    }
-    if text.contains('.') {
-        while text.ends_with('0') {
-            text.pop();
-        }
-        if text.ends_with('.') {
-            text.pop();
-        }
-    }
-    text
+    rekeydb_core::format_double_17g(value)
 }
 
 fn normalize_index(len: usize, requested: i64) -> Option<usize> {

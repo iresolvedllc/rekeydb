@@ -2,7 +2,7 @@
 
 use sha1::{Digest, Sha1};
 
-use rekeydb_core::Value;
+use rekeydb_core::{Value, format_double_17g};
 
 /// Compute the dataset digest over `(db, key, value, has_expire)` entries.
 ///
@@ -66,7 +66,7 @@ fn xor_object_digest(digest: &mut [u8; 20], value: &Value, has_expire: bool) {
             for (member, score) in &zset.scores {
                 let mut element = [0u8; 20];
                 mix_digest(&mut element, member);
-                mix_digest(&mut element, format!("{score:.17}").as_bytes());
+                mix_digest(&mut element, format_double_17g(*score).as_bytes());
                 xor_digest(digest, &element);
             }
         }

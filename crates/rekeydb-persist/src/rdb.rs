@@ -8,7 +8,7 @@
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rekeydb_core::{HashValue, Value};
+use rekeydb_core::{HashValue, SortedSet, Value};
 
 use crate::crc64::crc64;
 use crate::lzf;
@@ -18,7 +18,9 @@ const RDB_VERSION: u32 = 9;
 const RDB_TYPE_STRING: u8 = 0;
 const RDB_TYPE_LIST: u8 = 1;
 const RDB_TYPE_SET: u8 = 2;
+const RDB_TYPE_ZSET: u8 = 3;
 const RDB_TYPE_HASH: u8 = 4;
+const RDB_TYPE_ZSET_2: u8 = 5;
 const RDB_TYPE_HASH_ZIPMAP: u8 = 9;
 const RDB_TYPE_LIST_ZIPLIST: u8 = 10;
 const RDB_TYPE_SET_INTSET: u8 = 11;
@@ -134,7 +136,7 @@ fn object_type(value: &Value) -> Result<u8, RdbError> {
         Value::List(_) => Err(RdbError::UnsupportedValue("empty list")),
         Value::Set(_) => Err(RdbError::UnsupportedValue("empty set")),
         Value::Hash(_) => Ok(RDB_TYPE_HASH),
-        Value::ZSet(_) => Err(RdbError::UnsupportedValue("zset")),
+        Value::ZSet(_) => Ok(RDB_TYPE_ZSET_2),
     }
 }
 
@@ -160,7 +162,13 @@ fn write_object_value(out: &mut Vec<u8>, value: &Value) -> Result<(), RdbError> 
                 write_string(out, value);
             }
         }
-        Value::ZSet(_) => unreachable!("object_type rejects zsets"),
+        Value::ZSet(zset) => {
+            write_len(out, zset.scores.len() as u64);
+            for (member, score) in &zset.scores {
+                write_string(out, member);
+                out.extend_from_slice(&score.to_bits().to_le_bytes());
+            }
+        }
     }
     Ok(())
 }
@@ -317,6 +325,20 @@ fn read_object(kind: u8, reader: &mut Reader<'_>) -> Result<Value, RdbError> {
             }
             Ok(Value::Set(set))
         }
+        RDB_TYPE_ZSET | RDB_TYPE_ZSET_2 => {
+            let length = reader.len()? as usize;
+            let mut zset = SortedSet::default();
+            for _ in 0..length {
+                let member = reader.string()?;
+                let score = if kind == RDB_TYPE_ZSET_2 {
+                    f64::from_bits(reader.u64_le()?)
+                } else {
+                    read_old_double(reader)?
+                };
+                zset.scores.insert(member, score);
+            }
+            Ok(Value::ZSet(zset))
+        }
         RDB_TYPE_HASH => {
             let length = reader.len()? as usize;
             let mut hash = HashValue::with_capacity(length);
@@ -361,10 +383,43 @@ fn read_object(kind: u8, reader: &mut Reader<'_>) -> Result<Value, RdbError> {
             }
             Ok(Value::Hash(hash))
         }
-        RDB_TYPE_HASH_ZIPMAP | RDB_TYPE_ZSET_ZIPLIST | RDB_TYPE_STREAM_LISTPACKS => {
-            Err(RdbError::UnsupportedType(kind))
+        RDB_TYPE_ZSET_ZIPLIST => {
+            let blob = reader.string()?;
+            let values = ziplist::parse(&blob).map_err(RdbError::Corrupt)?;
+            if !values.len().is_multiple_of(2) {
+                return Err(RdbError::Corrupt(
+                    "zset ziplist has an odd number of entries".to_string(),
+                ));
+            }
+            let mut zset = SortedSet::default();
+            let mut iter = values.into_iter();
+            while let (Some(member), Some(score)) = (iter.next(), iter.next()) {
+                let text = String::from_utf8_lossy(&score);
+                let parsed = text
+                    .parse::<f64>()
+                    .map_err(|_| RdbError::Corrupt("invalid zset score".to_string()))?;
+                zset.scores.insert(member, parsed);
+            }
+            Ok(Value::ZSet(zset))
         }
+        RDB_TYPE_HASH_ZIPMAP | RDB_TYPE_STREAM_LISTPACKS => Err(RdbError::UnsupportedType(kind)),
         _ => Err(RdbError::UnsupportedType(kind)),
+    }
+}
+
+fn read_old_double(reader: &mut Reader<'_>) -> Result<f64, RdbError> {
+    let length = reader.u8()?;
+    match length {
+        255 => Ok(f64::NEG_INFINITY),
+        254 => Ok(f64::INFINITY),
+        253 => Ok(f64::NAN),
+        length => {
+            let bytes = reader.bytes(length as usize)?;
+            std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|text| text.parse::<f64>().ok())
+                .ok_or_else(|| RdbError::Corrupt("invalid double value".to_string()))
+        }
     }
 }
 
@@ -544,6 +599,8 @@ mod tests {
     fn roundtrips_supported_values() {
         let mut hash = HashValue::new();
         hash.insert(b"field".to_vec(), b"value".to_vec());
+        let mut zset = SortedSet::default();
+        zset.scores.insert(b"member".to_vec(), 1.5);
         let mut set = HashSet::new();
         set.insert(b"one".to_vec());
         set.insert(b"2".to_vec());
@@ -555,10 +612,11 @@ mod tests {
             ),
             entry(Value::Set(set), None),
             entry(Value::Hash(hash), None),
+            entry(Value::ZSet(zset), None),
         ];
         let bytes = save(&entries).unwrap();
         let loaded = load(&bytes).unwrap();
-        assert_eq!(loaded.len(), 4);
+        assert_eq!(loaded.len(), 5);
         assert_eq!(loaded[0].key, b"key");
         assert_eq!(loaded[1].expire_ms, Some(1_700_000_000_000));
         match &loaded[1].value {
@@ -572,6 +630,10 @@ mod tests {
                 assert_eq!(hash.get(b"field".as_slice()), Some(&b"value".to_vec()))
             }
             _ => panic!("expected hash"),
+        }
+        match &loaded[4].value {
+            Value::ZSet(zset) => assert_eq!(zset.scores.get(b"member".as_slice()), Some(&1.5)),
+            _ => panic!("expected zset"),
         }
     }
 
