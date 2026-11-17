@@ -59,10 +59,19 @@ it has been built.
 NixOS it supplies `libuuid`, OpenSSL, and zlib through `nix-shell`; on Debian
 and Ubuntu install `uuid-dev`, `libssl-dev`, and `zlib1g-dev`.
 
+AOF coverage:
+
+- `unit/aofrw.tcl`: **19/19 pass**, including rewrite under concurrent write
+  load, all five data types, delayed/refused rewrite handling, and AOF-enabled
+  restart behavior;
+- `integration/aof.tcl`: **25/25 pass**, including truncated AOF recovery,
+  incomplete MULTI handling, bad-format detection, `keydb-check-aof`, SPOP,
+  EXPIREAT, and fsync timing.
+
 ## Next
 
-- AOF and `BGREWRITEAOF`.
 - Streams, HLL, GEO, bitfield/bitpos/BITOP breadth.
 - `KEYDB.NHGET`/`NHSET` nested hashes.
+- AOF RDB preamble support and automatic rewrite thresholds.
 - Compact RDB output (quicklist/ziplist/intset/hash-ziplist/zset-ziplist) for
   byte-level parity.

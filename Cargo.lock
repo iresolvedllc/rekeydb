@@ -182,6 +182,7 @@ name = "rekeydb-persist"
 version = "0.1.0"
 dependencies = [
  "rekeydb-core",
+ "rekeydb-protocol",
  "sha1",
 ]
 

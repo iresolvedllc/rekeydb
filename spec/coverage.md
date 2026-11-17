@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 144 / 236
+Implemented: 151 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -11,21 +11,20 @@ Implemented: 144 / 236
 | @geo | 0 | 10 |
 | @hash | 17 | 19 |
 | @hyperloglog | 0 | 5 |
-| @keyspace | 25 | 39 |
+| @keyspace | 28 | 39 |
 | @list | 21 | 21 |
 | @replication | 0 | 3 |
 | @scripting | 0 | 3 |
 | @set | 16 | 16 |
 | @sortedset | 32 | 32 |
 | @stream | 0 | 15 |
-| @string | 12 | 22 |
+| @string | 15 | 22 |
 | @transaction | 5 | 5 |
-| uncategorized | 6 | 28 |
+| uncategorized | 7 | 28 |
 
 ## Missing
 
 - `module`
-- `getex`
 - `setnx`
 - `setex`
 - `psetex`
@@ -35,19 +34,13 @@ Implemented: 144 / 236
 - `getbit`
 - `bitfield`
 - `bitfield_ro`
-- `setrange`
-- `getrange`
 - `substr`
 - `incrbyfloat`
 - `msetnx`
 - `swapdb`
 - `move`
 - `copy`
-- `expiremember`
-- `expirememberat`
-- `pexpirememberat`
 - `replping`
-- `bgrewriteaof`
 - `sync`
 - `psync`
 - `replconf`

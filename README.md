@@ -29,6 +29,8 @@ Bootstrap / P0. Working today:
 - RDB v9 save/load, `SAVE`/`BGSAVE`, `DEBUG RELOAD`, `DEBUG DIGEST`, and
   `DUMP`/`RESTORE`, cross-compatible with KeyDB in both directions for strings, lists, hashes,
   sets, sorted sets, and expirations;
+- append-only persistence with `appendonly`, `appendfsync`, `BGREWRITEAOF`,
+  startup replay, truncation handling, and `DEBUG LOADAOF`;
 - generated command/config/test manifests and a Zig `rekeydb-cli`.
 
 The reference KeyDB tree lives in `KeyDB/` (development snapshot) and

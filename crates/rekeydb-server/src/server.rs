@@ -52,6 +52,7 @@ impl Client {
 }
 
 pub fn run(config: Config) -> Result<(), String> {
+    println!("rekeydb PID: {}", std::process::id());
     let address = resolve_address(&config)?;
     let mut listener = match TcpListener::bind(address) {
         Ok(listener) => listener,
@@ -75,7 +76,23 @@ pub fn run(config: Config) -> Result<(), String> {
 
     let mut state = State::new(config.clone());
     let rdb_path = config.dir.join(&config.dbfilename);
-    if rdb_path.is_file() {
+    let aof_path = config.dir.join(&config.appendfilename);
+    if config.appendonly {
+        if aof_path.is_file() {
+            state
+                .load_aof_from_disk()
+                .map_err(|err| format!("cannot load {}: {err}", aof_path.display()))?;
+        } else {
+            if rdb_path.is_file() {
+                state
+                    .reload_rdb_from_disk()
+                    .map_err(|err| format!("cannot load {}: {err}", rdb_path.display()))?;
+            }
+            state
+                .enable_aof()
+                .map_err(|err| format!("cannot enable AOF: {err}"))?;
+        }
+    } else if rdb_path.is_file() {
         state
             .reload_rdb_from_disk()
             .map_err(|err| format!("cannot load {}: {err}", rdb_path.display()))?;
@@ -91,8 +108,8 @@ pub fn run(config: Config) -> Result<(), String> {
         next_client_id: 1,
         running: true,
         trace_commands: std::env::var_os("REKEYDB_TRACE_COMMANDS").is_some(),
+        trace_names: std::env::var_os("REKEYDB_TRACE_NAMES").is_some(),
     };
-    println!("rekeydb PID: {}", std::process::id());
     println!(
         "rekeydb {} listening on {local} (server-threads={})",
         env!("CARGO_PKG_VERSION"),
@@ -113,6 +130,7 @@ struct Server {
     next_client_id: u64,
     running: bool,
     trace_commands: bool,
+    trace_names: bool,
 }
 
 impl Server {
@@ -142,7 +160,7 @@ impl Server {
                         if let Some(mut client) = self.clients.remove(&token) {
                             let _ = self.registry.deregister(&mut client.stream);
                             self.unblock(token);
-                            self.client_gone();
+                            self.client_gone(client.ctx.id);
                         }
                     } else {
                         self.flush_client(token);
@@ -172,6 +190,7 @@ impl Server {
                     self.clients.insert(token, Client::new(stream, ctx));
                     let mut state = self.state.lock().expect("state poisoned");
                     state.connected_clients += 1;
+                    state.register_client(id);
                     state.stats_mut().total_connections_received += 1;
                 }
                 Err(err) if err.kind() == ErrorKind::WouldBlock => break,
@@ -190,7 +209,11 @@ impl Server {
         let mut buffer = [0u8; 16 * 1024];
         let mut close = false;
         let mut input_bytes = 0usize;
-        loop {
+        let mut reads = 0usize;
+        // Do not let one fast producer monopolize the event loop: drain a
+        // bounded amount, process it, then return to polling other clients.
+        while reads < 16 {
+            reads += 1;
             match client.stream.read(&mut buffer) {
                 Ok(0) => {
                     close = true;
@@ -253,6 +276,12 @@ impl Server {
             }
             if self.trace_commands {
                 eprintln!("cmd[{}]: {:?}", client.ctx.id, command.args);
+            } else if self.trace_names {
+                eprintln!(
+                    "cmd[{}]: {}",
+                    client.ctx.id,
+                    String::from_utf8_lossy(&command.args[0])
+                );
             }
             let mut state = self.state.lock().expect("state poisoned");
             let outcome = state.execute(&command, &mut client.ctx);
@@ -482,7 +511,7 @@ impl Server {
         if client.close_after_flush && client.out.is_empty() {
             let _ = self.registry.deregister(&mut client.stream);
             self.unblock(token);
-            self.client_gone();
+            self.client_gone(client.ctx.id);
             if client.shutdown_after_flush {
                 self.running = false;
             }
@@ -500,14 +529,15 @@ impl Server {
         {
             eprintln!("cannot reregister client {}: {err}", client.ctx.id);
             let _ = self.registry.deregister(&mut client.stream);
-            self.client_gone();
+            self.client_gone(client.ctx.id);
             return;
         }
         self.clients.insert(token, client);
     }
 
-    fn client_gone(&mut self) {
+    fn client_gone(&mut self, id: u64) {
         let mut state = self.state.lock().expect("state poisoned");
+        state.unregister_client(id);
         state.connected_clients = state.connected_clients.saturating_sub(1);
     }
 }

@@ -8,4 +8,5 @@ rust-version.workspace = true
 
 [dependencies]
 rekeydb-core.workspace = true
+rekeydb-protocol.workspace = true
 sha1.workspace = true

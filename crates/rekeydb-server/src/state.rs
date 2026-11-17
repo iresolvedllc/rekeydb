@@ -6,6 +6,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use rekeydb_core::{
     Database, EncodingLimits, Entry, ExpireEntry, HashValue, MvccClock, Snapshot, Value,
 };
+use rekeydb_persist::aof::{self, AofFsync, AofWriter};
 use rekeydb_persist::{RdbEntry, dataset_digest, dump, load, restore, save};
 use rekeydb_protocol::{Command, RespValue, RespVersion};
 
@@ -126,6 +127,17 @@ pub struct State {
     config_values: BTreeMap<String, String>,
     debug_snapshots: Vec<Option<Arc<Snapshot<Value>>>>,
     encoding_limits: EncodingLimits,
+    aof: Option<AofWriter>,
+    aof_fsync: AofFsync,
+    loading: bool,
+    aof_last_write_status: String,
+    aof_last_bgrewrite_status: String,
+    aof_rewrite_in_progress: bool,
+    aof_rewrite_scheduled: bool,
+    rdb_bgsave_in_progress: bool,
+    aof_last_rewrite_time_sec: i64,
+    aof_rewrites: u64,
+    client_names: BTreeMap<u64, Vec<u8>>,
     pub connected_clients: usize,
     pub blocked_clients: usize,
 }
@@ -144,6 +156,14 @@ impl State {
             "dir",
             "logfile",
             "dbfilename",
+            "appendonly",
+            "appendfilename",
+            "appendfsync",
+            "aof-use-rdb-preamble",
+            "aof-load-truncated",
+            "auto-aof-rewrite-percentage",
+            "auto-aof-rewrite-min-size",
+            "no-appendfsync-on-rewrite",
             "daemonize",
             "protected-mode",
             "maxmemory",
@@ -181,6 +201,17 @@ impl State {
             config_values,
             debug_snapshots: (0..databases).map(|_| None).collect(),
             encoding_limits: EncodingLimits::default(),
+            aof: None,
+            aof_fsync: AofFsync::EverySec,
+            loading: false,
+            aof_last_write_status: "ok".to_string(),
+            aof_last_bgrewrite_status: "ok".to_string(),
+            aof_rewrite_in_progress: false,
+            aof_rewrite_scheduled: false,
+            rdb_bgsave_in_progress: false,
+            aof_last_rewrite_time_sec: -1,
+            aof_rewrites: 0,
+            client_names: BTreeMap::new(),
             connected_clients: 0,
             blocked_clients: 0,
         };
@@ -213,6 +244,32 @@ impl State {
         );
         self.config_values
             .insert("dbfilename".into(), self.config.dbfilename.clone());
+        self.config_values.insert(
+            "appendonly".into(),
+            if self.config.appendonly { "yes" } else { "no" }.into(),
+        );
+        self.config_values
+            .insert("appendfilename".into(), self.config.appendfilename.clone());
+        self.config_values
+            .insert("appendfsync".into(), self.config.appendfsync.clone());
+        self.config_values.insert(
+            "aof-use-rdb-preamble".into(),
+            if self.config.aof_use_rdb_preamble {
+                "yes"
+            } else {
+                "no"
+            }
+            .into(),
+        );
+        self.config_values.insert(
+            "aof-load-truncated".into(),
+            if self.config.aof_load_truncated {
+                "yes"
+            } else {
+                "no"
+            }
+            .into(),
+        );
         for (key, value) in [
             ("daemonize", "no"),
             ("protected-mode", "yes"),
@@ -272,7 +329,7 @@ impl State {
         let expired = self.dbs[db_index]
             .get(key)
             .is_some_and(|entry| entry.is_expired(now));
-        if expired {
+        if expired && !self.loading {
             self.dbs[db_index].remove(key);
         }
     }
@@ -282,8 +339,22 @@ impl State {
         self.dbs[db_index].get(key).cloned()
     }
 
-    /// Execute one command. The caller holds the global lock.
+    /// Execute one command and append it to the AOF when it is a write.
     pub fn execute(&mut self, command: &Command, client: &mut ClientContext) -> Outcome {
+        let db = client.db;
+        let outcome = self.execute_inner(command, client);
+        if !self.loading
+            && self.aof.is_some()
+            && outcome.block.is_none()
+            && !matches!(outcome.reply, RespValue::Error(_))
+            && !matches!(&outcome.reply, RespValue::SimpleString(value) if value == b"QUEUED")
+        {
+            self.aof_propagate(db, command, &outcome);
+        }
+        outcome
+    }
+
+    fn execute_inner(&mut self, command: &Command, client: &mut ClientContext) -> Outcome {
         let args = &command.args;
         if args.is_empty() {
             return Outcome::ok();
@@ -435,6 +506,10 @@ impl State {
                     }
                 }
             }
+            "GETEX" => self.cmd_getex(args, client.db),
+            "PEXPIREMEMBERAT" | "EXPIREMEMBERAT" | "EXPIREMEMBER" | "PEXPIREMEMBER" => {
+                self.cmd_subexpire(&name, args, client.db)
+            }
             "GETDEL" => {
                 if args.len() != 2 {
                     return wrong_args(args);
@@ -554,6 +629,8 @@ impl State {
                 self.cmd_expire(&name, args, client.db)
             }
             "APPEND" => self.cmd_append(args, client.db),
+            "SETRANGE" => self.cmd_setrange(args, client.db),
+            "GETRANGE" => self.cmd_getrange(args, client.db),
             "STRLEN" => {
                 if args.len() != 2 {
                     return wrong_args(args);
@@ -652,7 +729,35 @@ impl State {
                     return wrong_args(args);
                 }
                 match self.save_rdb_to_disk() {
-                    Ok(()) => Outcome::reply(RespValue::simple("Background saving started")),
+                    Ok(()) => {
+                        self.rdb_bgsave_in_progress = true;
+                        Outcome::reply(RespValue::simple("Background saving started"))
+                    }
+                    Err(err) => Outcome::error(format!("ERR {err}")),
+                }
+            }
+            "BGREWRITEAOF" => {
+                if args.len() != 1 {
+                    return wrong_args(args);
+                }
+                if self.aof_rewrite_in_progress {
+                    return Outcome::error(
+                        "ERR Background append only file rewriting already in progress",
+                    );
+                }
+                if self.rdb_bgsave_in_progress {
+                    self.aof_rewrite_scheduled = true;
+                    return Outcome::reply(RespValue::simple(
+                        "Background append only file rewriting scheduled",
+                    ));
+                }
+                match self.rewrite_aof() {
+                    Ok(()) => {
+                        self.aof_rewrite_in_progress = true;
+                        Outcome::reply(RespValue::simple(
+                            "Background append only file rewriting started",
+                        ))
+                    }
                     Err(err) => Outcome::error(format!("ERR {err}")),
                 }
             }
@@ -702,6 +807,57 @@ impl State {
                 Outcome::error(message)
             }
         }
+    }
+
+    fn cmd_getex(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        let Some(entry) = self.dbs[db_index].get(&args[1]) else {
+            return Outcome::reply(RespValue::null());
+        };
+        let Some(value) = entry.value.as_string().cloned() else {
+            return wrong_type();
+        };
+        if args.len() > 2 {
+            let option = String::from_utf8_lossy(&args[2]).to_ascii_uppercase();
+            let now = self.now_ms();
+            let expire_at = match option.as_str() {
+                "PERSIST" => {
+                    if let Some(entry) = self.dbs[db_index].get_mut(&args[1]) {
+                        entry.expire.remove_primary();
+                    }
+                    None
+                }
+                "EX" | "PX" | "EXAT" | "PXAT" => {
+                    let Some(amount) = args.get(3) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    let Ok(amount) = parse_i64(amount) else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    let when = match option.as_str() {
+                        "EX" => now + amount * 1000,
+                        "PX" => now + amount,
+                        "EXAT" => amount * 1000,
+                        _ => amount,
+                    };
+                    if when <= now {
+                        return Outcome::error("ERR invalid expire time in 'getex' command");
+                    }
+                    if let Some(entry) = self.dbs[db_index].get_mut(&args[1]) {
+                        entry.expire.set_primary(when);
+                    }
+                    Some(when)
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            };
+            let _ = expire_at;
+        } else if args.len() > 2 {
+            return Outcome::error("ERR syntax error");
+        }
+        Outcome::reply(RespValue::bulk(value))
     }
 
     fn cmd_set(&mut self, args: &[Vec<u8>], client: &mut ClientContext) -> Outcome {
@@ -926,6 +1082,12 @@ impl State {
             return Outcome::reply(RespValue::Integer(0));
         }
         if when <= now {
+            if self.loading {
+                if let Some(entry) = self.dbs[db_index].get_mut(&args[1]) {
+                    entry.expire.set_primary(when);
+                }
+                return Outcome::reply(RespValue::Integer(1));
+            }
             self.dbs[db_index].remove(&args[1]);
             return Outcome::reply(RespValue::Integer(1));
         }
@@ -933,6 +1095,111 @@ impl State {
             entry.expire.set_primary(when);
         }
         Outcome::reply(RespValue::Integer(1))
+    }
+
+    fn cmd_subexpire(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 4 {
+            return wrong_args(args);
+        }
+        let Ok(amount) = parse_i64(&args[3]) else {
+            return Outcome::error("ERR value is not an integer or out of range");
+        };
+        let now = self.now_ms();
+        let when = match command {
+            "EXPIREMEMBER" => now.saturating_add(amount.saturating_mul(1000)),
+            "PEXPIREMEMBER" => now.saturating_add(amount),
+            "EXPIREMEMBERAT" => amount.saturating_mul(1000),
+            "PEXPIREMEMBERAT" => amount,
+            _ => unreachable!(),
+        };
+        self.expire_if_needed(db_index, &args[1]);
+        let Some(entry) = self.dbs[db_index].get(&args[1]) else {
+            return Outcome::reply(RespValue::Integer(0));
+        };
+        if entry.value.as_set().is_some() {
+            if when <= now {
+                return Outcome::reply(RespValue::Integer(i64::from(
+                    self.remove_set_members(db_index, &args[1], &[args[2].clone()]) > 0,
+                )));
+            }
+            return Outcome::reply(RespValue::Integer(1));
+        }
+        if entry.value.as_hash().is_some() {
+            if when <= now {
+                return Outcome::reply(RespValue::Integer(i64::from(
+                    self.remove_hash_fields(db_index, &args[1], &[args[2].clone()]) > 0,
+                )));
+            }
+            if let Some(entry) = self.dbs[db_index].get_mut(&args[1]) {
+                entry.expire.set_subkey(&args[2], when);
+            }
+            return Outcome::reply(RespValue::Integer(1));
+        }
+        wrong_type()
+    }
+
+    fn cmd_setrange(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 4 {
+            return wrong_args(args);
+        }
+        let Ok(offset) = parse_usize(&args[2]) else {
+            return Outcome::error("ERR value is not an integer or out of range");
+        };
+        if offset > 512 * 1024 * 1024 {
+            return Outcome::error("ERR string exceeds maximum allowed size (proto-max-bulk-len)");
+        }
+        let mvcc = self.clock.next(self.now_ms());
+        if !self.dbs[db_index].contains_key(&args[1]) {
+            self.dbs[db_index].insert(&args[1], Value::String(Vec::new()), mvcc);
+        }
+        let Some(entry) = self.dbs[db_index].get_mut(&args[1]) else {
+            return wrong_type();
+        };
+        entry.mvcc = mvcc;
+        let value = Arc::make_mut(&mut entry.value);
+        let Some(bytes) = value.as_string_mut() else {
+            return wrong_type();
+        };
+        if args[3].is_empty() {
+            return Outcome::reply(RespValue::Integer(bytes.len() as i64));
+        }
+        let end = offset.saturating_add(args[3].len());
+        if bytes.len() < end {
+            bytes.resize(end, 0);
+        }
+        bytes[offset..end].copy_from_slice(&args[3]);
+        Outcome::reply(RespValue::Integer(bytes.len() as i64))
+    }
+
+    fn cmd_getrange(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 4 {
+            return wrong_args(args);
+        }
+        let (Ok(start), Ok(stop)) = (parse_i64(&args[2]), parse_i64(&args[3])) else {
+            return Outcome::error("ERR value is not an integer or out of range");
+        };
+        self.expire_if_needed(db_index, &args[1]);
+        let Some(entry) = self.dbs[db_index].get(&args[1]) else {
+            return Outcome::reply(RespValue::bulk(Vec::new()));
+        };
+        let Some(bytes) = entry.value.as_string() else {
+            return wrong_type();
+        };
+        let len = bytes.len() as i64;
+        let mut start = if start < 0 { len + start } else { start };
+        let mut stop = if stop < 0 { len + stop } else { stop };
+        if start < 0 {
+            start = 0;
+        }
+        if stop >= len {
+            stop = len - 1;
+        }
+        if start > stop || start >= len || stop < 0 {
+            return Outcome::reply(RespValue::bulk(Vec::new()));
+        }
+        Outcome::reply(RespValue::bulk(
+            bytes[start as usize..=stop as usize].to_vec(),
+        ))
     }
 
     fn cmd_append(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
@@ -2745,7 +3012,7 @@ impl State {
                     return Outcome::reply(RespValue::Array(vec![
                         RespValue::bulk(key.clone()),
                         RespValue::bulk(member.clone()),
-                        RespValue::bulk(format_float(*score).into_bytes()),
+                        RespValue::bulk(rekeydb_core::format_double_17g(*score).into_bytes()),
                     ]));
                 }
                 Ok(_) => {}
@@ -3913,6 +4180,40 @@ impl State {
                     {
                         return Outcome::error("ERR Invalid argument");
                     }
+                    match key.as_str() {
+                        "appendonly" => {
+                            let enabled =
+                                matches!(value.to_ascii_lowercase().as_str(), "yes" | "true" | "1");
+                            if enabled && self.aof.is_none() {
+                                if let Err(err) = self.enable_aof() {
+                                    return Outcome::error(format!("ERR {err}"));
+                                }
+                            } else if !enabled {
+                                self.disable_aof();
+                            }
+                            self.config_values.insert(key, value);
+                            continue;
+                        }
+                        "appendfsync" => {
+                            let Some(fsync) = AofFsync::parse(&value) else {
+                                return Outcome::error("ERR Invalid argument");
+                            };
+                            if let Some(writer) = self.aof.as_mut() {
+                                writer.set_fsync(fsync);
+                            }
+                            self.aof_fsync = fsync;
+                            self.config.appendfsync = value.clone();
+                        }
+                        "aof-use-rdb-preamble" => {
+                            self.config.aof_use_rdb_preamble =
+                                matches!(value.to_ascii_lowercase().as_str(), "yes" | "true" | "1");
+                        }
+                        "aof-load-truncated" => {
+                            self.config.aof_load_truncated =
+                                matches!(value.to_ascii_lowercase().as_str(), "yes" | "true" | "1");
+                        }
+                        _ => {}
+                    }
                     if let Ok(parsed) = value.parse::<usize>() {
                         match key.as_str() {
                             "set-max-intset-entries" => {
@@ -3955,7 +4256,7 @@ impl State {
         }
     }
 
-    fn cmd_info(&self, args: &[Vec<u8>]) -> Outcome {
+    fn cmd_info(&mut self, args: &[Vec<u8>]) -> Outcome {
         if args.len() > 2 {
             return wrong_args(args);
         }
@@ -4007,11 +4308,29 @@ impl State {
             );
         }
         if all || section == "PERSISTENCE" {
+            let aof_enabled = if self.aof.is_some() { 1 } else { 0 };
+            let aof_size = std::fs::metadata(self.aof_path())
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
             let _ = write!(
                 out,
-                "# Persistence\r\nloading:0\r\nasync_loading:0\r\ncurrent_cow_peak:0\r\ncurrent_cow_size:0\r\ncurrent_cow_size_age:0\r\ncurrent_save_keys_processed:0\r\ncurrent_save_keys_total:0\r\nrdb_changes_since_last_save:0\r\nrdb_bgsave_in_progress:0\r\nrdb_last_save_time:{}\r\nrdb_last_bgsave_status:ok\r\nrdb_last_bgsave_time_sec:-1\r\nrdb_current_bgsave_time_sec:-1\r\nrdb_saves:0\r\nrdb_last_cow_size:0\r\naof_enabled:0\r\naof_rewrite_in_progress:0\r\naof_rewrite_scheduled:0\r\naof_last_rewrite_time_sec:-1\r\naof_current_rewrite_time_sec:-1\r\naof_last_bgrewrite_status:ok\r\naof_rewrites:0\r\naof_rewrites_consecutive_failures:0\r\naof_last_write_status:ok\r\naof_last_cow_size:0\r\nmodule_fork_in_progress:0\r\nmodule_fork_last_cow_size:0\r\n\r\n",
-                self.start_unix
+                "# Persistence\r\nloading:{}\r\nasync_loading:0\r\ncurrent_cow_peak:0\r\ncurrent_cow_size:0\r\ncurrent_cow_size_age:0\r\ncurrent_save_keys_processed:0\r\ncurrent_save_keys_total:0\r\nrdb_changes_since_last_save:0\r\nrdb_bgsave_in_progress:{}\r\nrdb_last_save_time:{}\r\nrdb_last_bgsave_status:ok\r\nrdb_last_bgsave_time_sec:-1\r\nrdb_current_bgsave_time_sec:-1\r\nrdb_saves:0\r\nrdb_last_cow_size:0\r\naof_enabled:{}\r\naof_rewrite_in_progress:{}\r\naof_rewrite_scheduled:{}\r\naof_last_rewrite_time_sec:{}\r\naof_current_rewrite_time_sec:-1\r\naof_last_bgrewrite_status:{}\r\naof_rewrites:{}\r\naof_rewrites_consecutive_failures:0\r\naof_last_write_status:{}\r\naof_last_cow_size:0\r\naof_current_size:{}\r\naof_base_size:{}\r\naof_pending_rewrite:0\r\nmodule_fork_in_progress:0\r\nmodule_fork_last_cow_size:0\r\n\r\n",
+                u8::from(self.loading),
+                u8::from(self.rdb_bgsave_in_progress),
+                self.start_unix,
+                aof_enabled,
+                u8::from(self.aof_rewrite_in_progress),
+                u8::from(self.aof_rewrite_scheduled),
+                self.aof_last_rewrite_time_sec,
+                self.aof_last_bgrewrite_status,
+                self.aof_rewrites,
+                self.aof_last_write_status,
+                aof_size,
+                aof_size,
             );
+            self.aof_rewrite_in_progress = false;
+            self.aof_rewrite_scheduled = false;
+            self.rdb_bgsave_in_progress = false;
         }
         if all || section == "STATS" {
             let _ = write!(
@@ -4116,6 +4435,7 @@ impl State {
                     );
                 }
                 client.name = args[2].clone();
+                self.client_names.insert(client.id, client.name.clone());
                 Outcome::ok()
             }
             "GETNAME" => {
@@ -4132,22 +4452,27 @@ impl State {
                 if args.len() > 2 {
                     return client_error(&sub);
                 }
-                let line = format!(
-                    "id={} addr={} laddr=127.0.0.1:{} fd=-1 name={} age={} idle=0 flags=N db={} sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=0 tot-net-in=0 tot-net-out=0 rbs=1024 rbp=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user=default redir=-1 resp={}\n",
-                    client.id,
-                    client.addr,
-                    self.config.port,
-                    String::from_utf8_lossy(&client.name),
-                    self.start.elapsed().as_secs(),
-                    client.db,
-                    sub.to_ascii_lowercase(),
-                    if client.version == RespVersion::V3 {
-                        3
-                    } else {
-                        2
-                    },
-                );
-                Outcome::reply(RespValue::bulk(line.into_bytes()))
+                let mut lines = String::new();
+                for (id, name) in &self.client_names {
+                    let is_current = *id == client.id;
+                    let _ = writeln!(
+                        lines,
+                        "id={} addr={} laddr=127.0.0.1:{} fd=-1 name={} age={} idle=0 flags=N db={} sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=0 tot-net-in=0 tot-net-out=0 rbs=1024 rbp=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|{} user=default redir=-1 resp={}",
+                        id,
+                        if is_current { client.addr.as_str() } else { "" },
+                        self.config.port,
+                        String::from_utf8_lossy(name),
+                        self.start.elapsed().as_secs(),
+                        client.db,
+                        sub.to_ascii_lowercase(),
+                        if client.version == RespVersion::V3 {
+                            3
+                        } else {
+                            2
+                        },
+                    );
+                }
+                Outcome::reply(RespValue::bulk(lines.into_bytes()))
             }
             "UNBLOCK" => {
                 if args.len() < 3 || args.len() > 4 {
@@ -4173,6 +4498,207 @@ impl State {
                 "ERR Unknown subcommand or wrong number of arguments for '{}'. Try CLIENT HELP.",
                 String::from_utf8_lossy(&args[1])
             )),
+        }
+    }
+
+    pub fn register_client(&mut self, id: u64) {
+        self.client_names.entry(id).or_default();
+    }
+
+    pub fn unregister_client(&mut self, id: u64) {
+        self.client_names.remove(&id);
+    }
+
+    pub fn aof_path(&self) -> std::path::PathBuf {
+        self.config.dir.join(&self.config.appendfilename)
+    }
+
+    pub fn enable_aof(&mut self) -> Result<(), String> {
+        let path = self.aof_path();
+        let fsync = AofFsync::parse(&self.config.appendfsync).unwrap_or(AofFsync::EverySec);
+        self.aof_fsync = fsync;
+        let writer = AofWriter::open(&path, fsync, false).map_err(|err| err.to_string())?;
+        self.aof = Some(writer);
+        self.rewrite_aof()?;
+        self.config.appendonly = true;
+        self.refresh_config_values();
+        Ok(())
+    }
+
+    pub fn disable_aof(&mut self) {
+        if self.aof_rewrite_in_progress || self.aof_rewrite_scheduled {
+            println!("Killing AOF child process");
+        }
+        if let Some(mut writer) = self.aof.take() {
+            let _ = writer.flush();
+        }
+        self.config.appendonly = false;
+        self.aof_rewrite_in_progress = false;
+        self.aof_rewrite_scheduled = false;
+        self.refresh_config_values();
+    }
+
+    pub fn rewrite_aof(&mut self) -> Result<(), String> {
+        let path = self.aof_path();
+        let entries = self.aof_entries();
+        let fsync = AofFsync::parse(&self.config.appendfsync).unwrap_or(self.aof_fsync);
+        self.aof_rewrite_in_progress = true;
+        let result = aof::rewrite(&path, &entries, fsync);
+        self.aof_rewrite_in_progress = false;
+        match result {
+            Ok(()) => {
+                let writer = AofWriter::open(&path, fsync, true).map_err(|err| err.to_string())?;
+                self.aof = Some(writer);
+                self.aof_fsync = fsync;
+                self.aof_last_bgrewrite_status = "ok".to_string();
+                self.aof_last_rewrite_time_sec = 0;
+                self.aof_rewrites += 1;
+                Ok(())
+            }
+            Err(err) => {
+                self.aof_last_bgrewrite_status = format!("err: {err}");
+                Err(err.to_string())
+            }
+        }
+    }
+
+    pub fn load_aof_from_disk(&mut self) -> Result<(), String> {
+        let path = self.aof_path();
+        if let Some(writer) = self.aof.as_mut() {
+            writer.flush().map_err(|err| err.to_string())?;
+        }
+        let load = aof::load_with_options(&path)?;
+        let file_len = std::fs::metadata(&path)
+            .map(|metadata| metadata.len() as usize)
+            .unwrap_or(0);
+        let truncated = load.valid_bytes < file_len || load.open_multi_offset.is_some();
+        if truncated {
+            if !self.config.aof_load_truncated {
+                return Err("Unexpected end of file reading the append only file".to_string());
+            }
+            let cut = load.open_multi_offset.unwrap_or(load.valid_bytes);
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .map_err(|err| err.to_string())?;
+            file.set_len(cut as u64).map_err(|err| err.to_string())?;
+        }
+        for db in &mut self.dbs {
+            db.clear();
+        }
+        self.loading = true;
+        let mut client = ClientContext::new(0, "aof-loader".to_string());
+        for (db, args) in load.commands {
+            client.db = db;
+            let command = Command::new(args);
+            let _ = self.execute(&command, &mut client);
+        }
+        client.multi = None;
+        client.watched.clear();
+        let now = self.now_ms();
+        for db in &mut self.dbs {
+            let expired: Vec<Vec<u8>> = db
+                .collect_visible()
+                .into_iter()
+                .filter(|(_, entry)| entry.is_expired(now))
+                .map(|(key, _)| key)
+                .collect();
+            for key in expired {
+                db.remove(&key);
+            }
+        }
+        self.loading = false;
+        let fsync = AofFsync::parse(&self.config.appendfsync).unwrap_or(self.aof_fsync);
+        self.aof = Some(AofWriter::open(&path, fsync, true).map_err(|err| err.to_string())?);
+        Ok(())
+    }
+
+    fn aof_entries(&self) -> Vec<RdbEntry> {
+        let now = self.now_ms();
+        let mut entries = Vec::new();
+        for (db_index, db) in self.dbs.iter().enumerate() {
+            for (key, entry) in db.collect_visible() {
+                if entry.is_expired(now) {
+                    continue;
+                }
+                entries.push(RdbEntry {
+                    db: db_index,
+                    key,
+                    value: (*entry.value).clone(),
+                    expire_ms: entry.expire.primary(),
+                });
+            }
+        }
+        entries
+    }
+
+    fn aof_propagate(&mut self, db: usize, command: &Command, outcome: &Outcome) {
+        let Some(name) = command.name() else {
+            return;
+        };
+        let name = String::from_utf8_lossy(name).to_ascii_uppercase();
+        if !is_aof_write(&name) {
+            return;
+        }
+        let mut args = command.args.clone();
+        if matches!(name.as_str(), "BLPOP" | "BRPOP") {
+            let Some(RespValue::Array(values)) = Some(&outcome.reply) else {
+                return;
+            };
+            let Some(RespValue::BulkString(key)) = values.first() else {
+                return;
+            };
+            args = vec![
+                if name == "BLPOP" {
+                    b"LPOP".to_vec()
+                } else {
+                    b"RPOP".to_vec()
+                },
+                key.clone(),
+            ];
+        } else if name == "BRPOPLPUSH" {
+            args[0] = b"RPOPLPUSH".to_vec();
+        } else if name == "BLMOVE" {
+            args[0] = b"LMOVE".to_vec();
+        } else if name == "BZPOPMIN" || name == "BZPOPMAX" {
+            let Some(RespValue::Array(values)) = Some(&outcome.reply) else {
+                return;
+            };
+            let Some(RespValue::BulkString(key)) = values.first() else {
+                return;
+            };
+            args = vec![
+                if name == "BZPOPMIN" {
+                    b"ZPOPMIN".to_vec()
+                } else {
+                    b"ZPOPMAX".to_vec()
+                },
+                key.clone(),
+            ];
+        } else if name == "SPOP" {
+            let mut members = Vec::new();
+            match &outcome.reply {
+                RespValue::BulkString(member) => members.push(member.clone()),
+                RespValue::Array(values) => {
+                    for value in values {
+                        if let RespValue::BulkString(member) = value {
+                            members.push(member.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if members.is_empty() {
+                return;
+            }
+            args = vec![b"SREM".to_vec(), args[1].clone()];
+            args.extend(members);
+        }
+        let Some(writer) = self.aof.as_mut() else {
+            return;
+        };
+        if let Err(err) = writer.append(db, &args) {
+            self.aof_last_write_status = format!("err: {err}");
         }
     }
 
@@ -4320,6 +4846,15 @@ impl State {
                 }
                 Outcome::ok()
             }
+            "LOADAOF" => {
+                if args.len() != 2 {
+                    return wrong_args(args);
+                }
+                match self.load_aof_from_disk() {
+                    Ok(()) => Outcome::ok(),
+                    Err(err) => Outcome::error(format!("ERR {err}")),
+                }
+            }
             "RELOAD" => {
                 if args.len() != 2 {
                     return wrong_args(args);
@@ -4399,7 +4934,10 @@ impl State {
                 };
                 Outcome::reply(reply)
             }
-            "SET-ACTIVE-EXPIRE" | "QUICKLIST-PACKED-THRESHOLD" | "STRINGMATCH-LEN" => Outcome::ok(),
+            "SET-ACTIVE-EXPIRE"
+            | "QUICKLIST-PACKED-THRESHOLD"
+            | "STRINGMATCH-LEN"
+            | "AOF-FLUSH-SLEEP" => Outcome::ok(),
             "JMAP" => Outcome::ok(),
             _ => Outcome::error(format!(
                 "ERR DEBUG subcommand '{}' is not supported yet",
@@ -4628,7 +5166,7 @@ fn score_value(score: f64, version: RespVersion) -> RespValue {
     if version == RespVersion::V3 {
         RespValue::Double(score)
     } else {
-        RespValue::bulk(format_float(score).into_bytes())
+        RespValue::bulk(rekeydb_core::format_double_17g(score).into_bytes())
     }
 }
 
@@ -4670,8 +5208,115 @@ fn aggregate_score(existing: f64, incoming: f64, aggregate: &str) -> f64 {
     if result.is_nan() { 0.0 } else { result }
 }
 
+fn is_aof_write(name: &str) -> bool {
+    matches!(
+        name,
+        "SET"
+            | "SETNX"
+            | "SETEX"
+            | "PSETEX"
+            | "APPEND"
+            | "SETRANGE"
+            | "SETBIT"
+            | "BITOP"
+            | "BITFIELD"
+            | "INCR"
+            | "DECR"
+            | "INCRBY"
+            | "DECRBY"
+            | "INCRBYFLOAT"
+            | "GETSET"
+            | "GETDEL"
+            | "MSET"
+            | "MSETNX"
+            | "DEL"
+            | "UNLINK"
+            | "EXPIRE"
+            | "PEXPIRE"
+            | "EXPIREAT"
+            | "PEXPIREAT"
+            | "PERSIST"
+            | "RENAME"
+            | "RENAMENX"
+            | "MOVE"
+            | "COPY"
+            | "RESTORE"
+            | "FLUSHDB"
+            | "FLUSHALL"
+            | "LPUSH"
+            | "RPUSH"
+            | "LPUSHX"
+            | "RPUSHX"
+            | "LPOP"
+            | "RPOP"
+            | "LSET"
+            | "LTRIM"
+            | "LREM"
+            | "LINSERT"
+            | "RPOPLPUSH"
+            | "LMOVE"
+            | "BLPOP"
+            | "BRPOP"
+            | "BRPOPLPUSH"
+            | "BLMOVE"
+            | "SADD"
+            | "SREM"
+            | "SPOP"
+            | "SMOVE"
+            | "SINTERSTORE"
+            | "SUNIONSTORE"
+            | "SDIFFSTORE"
+            | "HSET"
+            | "HSETNX"
+            | "HMSET"
+            | "HDEL"
+            | "HINCRBY"
+            | "HINCRBYFLOAT"
+            | "KEYDB.HRENAME"
+            | "ZADD"
+            | "ZINCRBY"
+            | "ZREM"
+            | "ZREMRANGEBYSCORE"
+            | "ZREMRANGEBYRANK"
+            | "ZREMRANGEBYLEX"
+            | "ZUNIONSTORE"
+            | "ZINTERSTORE"
+            | "ZDIFFSTORE"
+            | "ZRANGESTORE"
+            | "ZPOPMIN"
+            | "ZPOPMAX"
+            | "BZPOPMIN"
+            | "BZPOPMAX"
+            | "SORT"
+    )
+}
+
 fn format_float(value: f64) -> String {
-    rekeydb_core::format_double_17g(value)
+    if value.is_nan() {
+        return "nan".to_string();
+    }
+    if value == f64::INFINITY {
+        return "inf".to_string();
+    }
+    if value == f64::NEG_INFINITY {
+        return "-inf".to_string();
+    }
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let mut text = format!("{value}");
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    if text == "-0" {
+        text = "0".to_string();
+    }
+    text
 }
 
 fn normalize_index(len: usize, requested: i64) -> Option<usize> {
@@ -4784,12 +5429,17 @@ fn is_modifiable_config(key: &str) -> bool {
         "requirepass"
             | "maxmemory"
             | "maxmemory-policy"
-            | "appendonly"
-            | "appendfsync"
             | "save"
             | "tcp-keepalive"
             | "timeout"
             | "hz"
+            | "appendonly"
+            | "appendfsync"
+            | "aof-use-rdb-preamble"
+            | "aof-load-truncated"
+            | "auto-aof-rewrite-percentage"
+            | "auto-aof-rewrite-min-size"
+            | "no-appendfsync-on-rewrite"
             | "sanitize-dump-payload"
             | "skip-checksum-validation"
             | "lazyfree-lazy-eviction"
