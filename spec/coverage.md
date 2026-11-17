@@ -1,45 +1,32 @@
 # rekeydb command coverage
 
-Implemented: 151 / 236
+Implemented: 167 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
 | @admin | 1 | 1 |
-| @bitmap | 0 | 7 |
+| @bitmap | 7 | 7 |
 | @connection | 7 | 8 |
 | @dangerous | 2 | 2 |
 | @geo | 0 | 10 |
 | @hash | 17 | 19 |
 | @hyperloglog | 0 | 5 |
-| @keyspace | 28 | 39 |
+| @keyspace | 31 | 39 |
 | @list | 21 | 21 |
 | @replication | 0 | 3 |
 | @scripting | 0 | 3 |
 | @set | 16 | 16 |
 | @sortedset | 32 | 32 |
 | @stream | 0 | 15 |
-| @string | 15 | 22 |
+| @string | 21 | 22 |
 | @transaction | 5 | 5 |
 | uncategorized | 7 | 28 |
 
 ## Missing
 
 - `module`
-- `setnx`
-- `setex`
-- `psetex`
 - `expdel`
 - `keydb.mexists`
-- `setbit`
-- `getbit`
-- `bitfield`
-- `bitfield_ro`
-- `substr`
-- `incrbyfloat`
-- `msetnx`
-- `swapdb`
-- `move`
-- `copy`
 - `replping`
 - `sync`
 - `psync`
@@ -64,9 +51,6 @@ Implemented: 151 / 236
 - `evalsha`
 - `slowlog`
 - `script`
-- `bitop`
-- `bitcount`
-- `bitpos`
 - `geoadd`
 - `georadius`
 - `georadius_ro`

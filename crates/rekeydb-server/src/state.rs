@@ -7,7 +7,7 @@ use rekeydb_core::{
     Database, EncodingLimits, Entry, ExpireEntry, HashValue, MvccClock, Snapshot, Value,
 };
 use rekeydb_persist::aof::{self, AofFsync, AofWriter};
-use rekeydb_persist::{RdbEntry, dataset_digest, dump, load, restore, save};
+use rekeydb_persist::{RdbEntry, dataset_digest, dump, load, restore, save, value_digest};
 use rekeydb_protocol::{Command, RespValue, RespVersion};
 
 use crate::config::Config;
@@ -159,11 +159,18 @@ impl State {
             "appendonly",
             "appendfilename",
             "appendfsync",
+            "proto-max-bulk-len",
             "aof-use-rdb-preamble",
             "aof-load-truncated",
             "auto-aof-rewrite-percentage",
             "auto-aof-rewrite-min-size",
             "no-appendfsync-on-rewrite",
+            "repl-ping-replica-period",
+            "repl-timeout",
+            "repl-diskless-sync",
+            "repl-disable-tcp-nodelay",
+            "replica-read-only",
+            "replica-serve-stale-data",
             "daemonize",
             "protected-mode",
             "maxmemory",
@@ -252,6 +259,9 @@ impl State {
             .insert("appendfilename".into(), self.config.appendfilename.clone());
         self.config_values
             .insert("appendfsync".into(), self.config.appendfsync.clone());
+        self.config_values
+            .entry("proto-max-bulk-len".into())
+            .or_insert_with(|| "512mb".into());
         self.config_values.insert(
             "aof-use-rdb-preamble".into(),
             if self.config.aof_use_rdb_preamble {
@@ -488,6 +498,9 @@ impl State {
                 Outcome::ok()
             }
             "SET" => self.cmd_set(args, client),
+            "SETNX" => self.cmd_setnx(args, client.db),
+            "SETEX" => self.cmd_setex(&name, args, client.db),
+            "PSETEX" => self.cmd_setex(&name, args, client.db),
             "GET" => {
                 if args.len() != 2 {
                     return wrong_args(args);
@@ -631,6 +644,12 @@ impl State {
             "APPEND" => self.cmd_append(args, client.db),
             "SETRANGE" => self.cmd_setrange(args, client.db),
             "GETRANGE" => self.cmd_getrange(args, client.db),
+            "SETBIT" => self.cmd_setbit(args, client.db),
+            "GETBIT" => self.cmd_getbit(args, client.db),
+            "BITCOUNT" => self.cmd_bitcount(args, client.db),
+            "BITPOS" => self.cmd_bitpos(args, client.db),
+            "BITOP" => self.cmd_bitop(args, client.db),
+            "BITFIELD" | "BITFIELD_RO" => self.cmd_bitfield(&name, args, client.db),
             "STRLEN" => {
                 if args.len() != 2 {
                     return wrong_args(args);
@@ -670,6 +689,9 @@ impl State {
             }
             "OBJECT" => self.cmd_object(args, client.db),
             "INCR" | "DECR" | "INCRBY" | "DECRBY" => self.cmd_incr(&name, args, client.db),
+            "INCRBYFLOAT" => self.cmd_incrbyfloat(args, client.db),
+            "MSETNX" => self.cmd_msetnx(args, client.db),
+            "SUBSTR" => self.cmd_getrange(args, client.db),
             "MSET" => {
                 if args.len() < 3 || args.len().is_multiple_of(2) {
                     return wrong_args(args);
@@ -713,6 +735,9 @@ impl State {
             "DUMP" => self.cmd_dump(args, client.db),
             "RESTORE" => self.cmd_restore(args, client.db),
             "SORT" => self.cmd_sort(args, client.db),
+            "MOVE" => self.cmd_move(args, client.db),
+            "COPY" => self.cmd_copy(args, client.db),
+            "SWAPDB" => self.cmd_swapdb(args),
             "CONFIG" => self.cmd_config(args),
             "DEBUG" => self.cmd_debug(args, client),
             "SAVE" => {
@@ -858,6 +883,194 @@ impl State {
             return Outcome::error("ERR syntax error");
         }
         Outcome::reply(RespValue::bulk(value))
+    }
+
+    fn cmd_setnx(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 3 {
+            return wrong_args(args);
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        if self.dbs[db_index].contains_key(&args[1]) {
+            return Outcome::reply(RespValue::Integer(0));
+        }
+        let mvcc = self.clock.next(self.now_ms());
+        self.dbs[db_index].insert(&args[1], Value::String(args[2].clone()), mvcc);
+        Outcome::reply(RespValue::Integer(1))
+    }
+
+    fn cmd_setex(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 4 {
+            return wrong_args(args);
+        }
+        let Ok(amount) = parse_i64(&args[2]) else {
+            return Outcome::error("ERR value is not an integer or out of range");
+        };
+        if amount <= 0 {
+            return Outcome::error(format!(
+                "ERR invalid expire time in '{}' command",
+                command.to_ascii_lowercase()
+            ));
+        }
+        let now = self.now_ms();
+        let when = if command == "SETEX" {
+            now.saturating_add(amount.saturating_mul(1000))
+        } else {
+            now.saturating_add(amount)
+        };
+        let mut expire = ExpireEntry::new();
+        expire.set_primary(when);
+        let mvcc = self.clock.next(now);
+        self.dbs[db_index].insert_entry(
+            args[1].clone(),
+            Entry::with_expire(Arc::new(Value::String(args[3].clone())), expire, mvcc),
+        );
+        Outcome::ok()
+    }
+
+    fn cmd_incrbyfloat(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 3 {
+            return wrong_args(args);
+        }
+        let Some(increment) = std::str::from_utf8(&args[2])
+            .ok()
+            .and_then(|text| text.parse::<f64>().ok())
+        else {
+            return Outcome::error("ERR value is not a valid float");
+        };
+        if !increment.is_finite() {
+            return Outcome::error("ERR increment would produce NaN or Infinity");
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        let (current, expire) = match self.dbs[db_index].get(&args[1]) {
+            Some(entry) => match entry.value.as_string() {
+                Some(bytes) => match std::str::from_utf8(bytes)
+                    .ok()
+                    .and_then(|text| text.parse::<f64>().ok())
+                {
+                    Some(value) => (value, entry.expire.clone()),
+                    None => return Outcome::error("ERR value is not a valid float"),
+                },
+                None => return wrong_type(),
+            },
+            None => (0.0, ExpireEntry::new()),
+        };
+        let value = current + increment;
+        if !value.is_finite() {
+            return Outcome::error("ERR increment would produce NaN or Infinity");
+        }
+        let text = format_float(value);
+        let mvcc = self.clock.next(self.now_ms());
+        self.dbs[db_index].insert_entry(
+            args[1].clone(),
+            Entry::with_expire(
+                Arc::new(Value::String(text.clone().into_bytes())),
+                expire,
+                mvcc,
+            ),
+        );
+        Outcome::reply(RespValue::bulk(text.into_bytes()))
+    }
+
+    fn cmd_msetnx(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 || args.len().is_multiple_of(2) {
+            return wrong_args(args);
+        }
+        for pair in args[1..].chunks(2) {
+            self.expire_if_needed(db_index, &pair[0]);
+            if self.dbs[db_index].contains_key(&pair[0]) {
+                return Outcome::reply(RespValue::Integer(0));
+            }
+        }
+        let mvcc = self.clock.next(self.now_ms());
+        for pair in args[1..].chunks(2) {
+            self.dbs[db_index].insert(&pair[0], Value::String(pair[1].clone()), mvcc);
+        }
+        Outcome::reply(RespValue::Integer(1))
+    }
+
+    fn cmd_move(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 3 {
+            return wrong_args(args);
+        }
+        let Ok(destination) = parse_usize(&args[2]) else {
+            return Outcome::error("ERR value is not an integer or out of range");
+        };
+        if destination >= self.dbs.len() {
+            return Outcome::error("ERR DB index is out of range");
+        }
+        if destination == db_index {
+            return Outcome::error("ERR source and destination objects are the same");
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        self.expire_if_needed(destination, &args[1]);
+        if self.dbs[destination].contains_key(&args[1]) {
+            return Outcome::reply(RespValue::Integer(0));
+        }
+        let Some(entry) = self.dbs[db_index].get(&args[1]).cloned() else {
+            return Outcome::reply(RespValue::Integer(0));
+        };
+        self.dbs[db_index].remove(&args[1]);
+        self.dbs[destination].insert_entry(args[1].clone(), entry);
+        Outcome::reply(RespValue::Integer(1))
+    }
+
+    fn cmd_copy(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let mut destination_db = db_index;
+        let mut replace = false;
+        let mut index = 3;
+        while index < args.len() {
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "REPLACE" => {
+                    replace = true;
+                    index += 1;
+                }
+                "DB" => {
+                    let Some(value) = args.get(index + 1) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    let Ok(db) = parse_usize(value) else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    if db >= self.dbs.len() {
+                        return Outcome::error("ERR DB index is out of range");
+                    }
+                    destination_db = db;
+                    index += 2;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        self.expire_if_needed(destination_db, &args[2]);
+        let Some(entry) = self.dbs[db_index].get(&args[1]).cloned() else {
+            return Outcome::reply(RespValue::Integer(0));
+        };
+        if self.dbs[destination_db].contains_key(&args[2]) && !replace {
+            return Outcome::reply(RespValue::Integer(0));
+        }
+        let mvcc = self.clock.next(self.now_ms());
+        let mut entry = entry;
+        entry.mvcc = mvcc;
+        self.dbs[destination_db].insert_entry(args[2].clone(), entry);
+        Outcome::reply(RespValue::Integer(1))
+    }
+
+    fn cmd_swapdb(&mut self, args: &[Vec<u8>]) -> Outcome {
+        if args.len() != 3 {
+            return wrong_args(args);
+        }
+        let (Ok(first), Ok(second)) = (parse_usize(&args[1]), parse_usize(&args[2])) else {
+            return Outcome::error("ERR invalid DB index");
+        };
+        if first >= self.dbs.len() || second >= self.dbs.len() {
+            return Outcome::error("ERR DB index is out of range");
+        }
+        self.dbs.swap(first, second);
+        Outcome::ok()
     }
 
     fn cmd_set(&mut self, args: &[Vec<u8>], client: &mut ClientContext) -> Outcome {
@@ -1136,6 +1349,448 @@ impl State {
             return Outcome::reply(RespValue::Integer(1));
         }
         wrong_type()
+    }
+
+    fn cmd_setbit(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 4 {
+            return wrong_args(args);
+        }
+        let Ok(offset) = parse_u64(&args[2]) else {
+            return Outcome::error("ERR bit offset is not an integer or out of range");
+        };
+        if offset >> 3 >= self.configured_max_bulk_len() {
+            return Outcome::error("ERR bit offset is not an integer or out of range");
+        }
+        let Ok(bit) = parse_i64(&args[3]) else {
+            return Outcome::error("ERR bit is not an integer or out of range");
+        };
+        if bit != 0 && bit != 1 {
+            return Outcome::error("ERR bit is not an integer or out of range");
+        }
+        let mvcc = self.clock.next(self.now_ms());
+        if !self.dbs[db_index].contains_key(&args[1]) {
+            self.dbs[db_index].insert(&args[1], Value::String(Vec::new()), mvcc);
+        }
+        let Some(entry) = self.dbs[db_index].get_mut(&args[1]) else {
+            return wrong_type();
+        };
+        entry.mvcc = mvcc;
+        let value = Arc::make_mut(&mut entry.value);
+        let Some(bytes) = value.as_string_mut() else {
+            return wrong_type();
+        };
+        let byte = (offset / 8) as usize;
+        let mask = 1 << (7 - (offset % 8));
+        if bytes.len() <= byte {
+            bytes.resize(byte + 1, 0);
+        }
+        let old = i64::from(bytes[byte] & mask != 0);
+        if bit == 1 {
+            bytes[byte] |= mask;
+        } else {
+            bytes[byte] &= !mask;
+        }
+        Outcome::reply(RespValue::Integer(old))
+    }
+
+    fn cmd_getbit(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 3 {
+            return wrong_args(args);
+        }
+        let Ok(offset) = parse_u64(&args[2]) else {
+            return Outcome::error("ERR bit offset is not an integer or out of range");
+        };
+        if offset >> 3 >= self.configured_max_bulk_len() {
+            return Outcome::error("ERR bit offset is not an integer or out of range");
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        let Some(entry) = self.dbs[db_index].get(&args[1]) else {
+            return Outcome::reply(RespValue::Integer(0));
+        };
+        let Some(bytes) = entry.value.as_string() else {
+            return wrong_type();
+        };
+        let byte = (offset / 8) as usize;
+        if byte >= bytes.len() {
+            return Outcome::reply(RespValue::Integer(0));
+        }
+        let mask = 1 << (7 - (offset % 8));
+        Outcome::reply(RespValue::Integer(i64::from(bytes[byte] & mask != 0)))
+    }
+
+    fn cmd_bitcount(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 2 && args.len() != 4 {
+            return Outcome::error("ERR syntax error");
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        let Some(entry) = self.dbs[db_index].get(&args[1]) else {
+            return Outcome::reply(RespValue::Integer(0));
+        };
+        let Some(bytes) = entry.value.as_string() else {
+            return wrong_type();
+        };
+        let (start, end) = if args.len() == 2 {
+            (0i64, bytes.len() as i64 - 1)
+        } else {
+            let (Ok(start), Ok(end)) = (parse_i64(&args[2]), parse_i64(&args[3])) else {
+                return Outcome::error("ERR value is not an integer or out of range");
+            };
+            if start < 0 && end < 0 && start > end {
+                return Outcome::reply(RespValue::Integer(0));
+            }
+            let len = bytes.len() as i64;
+            let mut start = if start < 0 { len + start } else { start };
+            let mut end = if end < 0 { len + end } else { end };
+            if start < 0 {
+                start = 0;
+            }
+            if end < 0 {
+                end = 0;
+            }
+            if end >= len {
+                end = len - 1;
+            }
+            (start, end)
+        };
+        if start > end || bytes.is_empty() {
+            return Outcome::reply(RespValue::Integer(0));
+        }
+        let count: u32 = bytes[start as usize..=end as usize]
+            .iter()
+            .map(|byte| byte.count_ones())
+            .sum();
+        Outcome::reply(RespValue::Integer(i64::from(count)))
+    }
+
+    fn cmd_bitpos(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 || args.len() > 5 {
+            return wrong_args(args);
+        }
+        let Ok(bit) = parse_i64(&args[2]) else {
+            return Outcome::error("ERR value is not an integer or out of range");
+        };
+        if bit != 0 && bit != 1 {
+            return Outcome::error("ERR The bit argument must be 1 or 0.");
+        }
+        self.expire_if_needed(db_index, &args[1]);
+        let Some(entry) = self.dbs[db_index].get(&args[1]) else {
+            return Outcome::reply(RespValue::Integer(if bit == 0 { 0 } else { -1 }));
+        };
+        let Some(bytes) = entry.value.as_string() else {
+            return wrong_type();
+        };
+        let len = bytes.len() as i64;
+        let mut start = 0i64;
+        let mut end = len - 1;
+        let end_given = args.len() == 5;
+        if args.len() >= 4 {
+            let Ok(value) = parse_i64(&args[3]) else {
+                return Outcome::error("ERR value is not an integer or out of range");
+            };
+            start = if value < 0 { len + value } else { value };
+            if start < 0 {
+                start = 0;
+            }
+        }
+        if end_given {
+            let Ok(value) = parse_i64(&args[4]) else {
+                return Outcome::error("ERR value is not an integer or out of range");
+            };
+            end = if value < 0 { len + value } else { value };
+            if end >= len {
+                end = len - 1;
+            }
+        }
+        if start > end || start >= len {
+            return Outcome::reply(RespValue::Integer(-1));
+        }
+        for byte_index in start..=end {
+            let byte = bytes[byte_index as usize];
+            if bit == 1 {
+                if byte != 0 {
+                    for bit_index in 0..8 {
+                        if byte & (1 << (7 - bit_index)) != 0 {
+                            return Outcome::reply(RespValue::Integer(byte_index * 8 + bit_index));
+                        }
+                    }
+                }
+            } else if byte != 0xFF {
+                for bit_index in 0..8 {
+                    if byte & (1 << (7 - bit_index)) == 0 {
+                        return Outcome::reply(RespValue::Integer(byte_index * 8 + bit_index));
+                    }
+                }
+            }
+        }
+        if bit == 0 && !end_given {
+            return Outcome::reply(RespValue::Integer(len * 8));
+        }
+        Outcome::reply(RespValue::Integer(-1))
+    }
+
+    fn cmd_bitop(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 4 {
+            return wrong_args(args);
+        }
+        let op = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+        let shift_op = matches!(op.as_str(), "LSHIFT" | "RSHIFT");
+        if op == "NOT" && args.len() != 4 {
+            return Outcome::error("ERR BITOP NOT must be called with a single source key.");
+        }
+        if shift_op && args.len() != 5 {
+            return Outcome::error(
+                "ERR BITOP SHIFT must be called with a single source key and an integer shift.",
+            );
+        }
+        if !matches!(
+            op.as_str(),
+            "AND" | "OR" | "XOR" | "NOT" | "LSHIFT" | "RSHIFT"
+        ) {
+            return Outcome::error("ERR syntax error");
+        }
+        let source_start = 3;
+        let source_end = if shift_op { 4 } else { args.len() };
+        let mut sources = Vec::new();
+        for key in &args[source_start..source_end] {
+            self.expire_if_needed(db_index, key);
+            match self.dbs[db_index].get(key) {
+                Some(entry) => match entry.value.as_string() {
+                    Some(bytes) => sources.push(bytes.clone()),
+                    None => return wrong_type(),
+                },
+                None => sources.push(Vec::new()),
+            }
+        }
+        let result: Vec<u8> = if shift_op {
+            let Some(shift_text) = args.get(4) else {
+                return Outcome::error("ERR BITOP SHIFT's last parameter must be an integer");
+            };
+            let Ok(mut shift) = parse_i64(shift_text) else {
+                return Outcome::error("ERR BITOP SHIFT's last parameter must be an integer");
+            };
+            if op == "RSHIFT" {
+                shift = -shift;
+            }
+            if !(-(1 << 30)..=1 << 30).contains(&shift) {
+                return Outcome::error("ERR BITOP SHIFT value is too large.");
+            }
+            shift_bits(&sources[0], shift)
+        } else {
+            let maxlen = sources.iter().map(Vec::len).max().unwrap_or(0);
+            (0..maxlen)
+                .map(|index| {
+                    let mut value = if op == "NOT" {
+                        !sources[0].get(index).copied().unwrap_or(0)
+                    } else {
+                        sources[0].get(index).copied().unwrap_or(0)
+                    };
+                    if op != "NOT" {
+                        for source in &sources[1..] {
+                            let byte = source.get(index).copied().unwrap_or(0);
+                            value = match op.as_str() {
+                                "AND" => value & byte,
+                                "OR" => value | byte,
+                                "XOR" => value ^ byte,
+                                _ => unreachable!(),
+                            };
+                        }
+                    }
+                    value
+                })
+                .collect()
+        };
+        let destination = &args[2];
+        let mvcc = self.clock.next(self.now_ms());
+        if result.is_empty() {
+            self.dbs[db_index].remove(destination);
+        } else {
+            self.dbs[db_index].insert(destination, Value::String(result.clone()), mvcc);
+        }
+        Outcome::reply(RespValue::Integer(result.len() as i64))
+    }
+
+    fn configured_max_bulk_len(&self) -> u64 {
+        let text = self
+            .config_values
+            .get("proto-max-bulk-len")
+            .map(String::as_str)
+            .unwrap_or("512mb");
+        parse_memory(text).unwrap_or(512 * 1024 * 1024)
+    }
+
+    fn cmd_bitfield(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let read_only = command == "BITFIELD_RO";
+        let mut overflow = BitOverflow::Wrap;
+        let mut results = Vec::new();
+        let mut index = 2;
+        while index < args.len() {
+            let operation = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match operation.as_str() {
+                "OVERFLOW" => {
+                    let Some(mode) = args.get(index + 1) else {
+                        return Outcome::error("ERR syntax error");
+                    };
+                    overflow = match String::from_utf8_lossy(mode).to_ascii_uppercase().as_str() {
+                        "WRAP" => BitOverflow::Wrap,
+                        "SAT" => BitOverflow::Sat,
+                        "FAIL" => BitOverflow::Fail,
+                        _ => return Outcome::error("ERR syntax error"),
+                    };
+                    index += 2;
+                }
+                "GET" => {
+                    if index + 2 >= args.len() {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    let Some((signed, bits)) = parse_bitfield_type(&args[index + 1]) else {
+                        return Outcome::error(
+                            "ERR Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.",
+                        );
+                    };
+                    let Some(offset) = self.parse_bitfield_offset(&args[index + 2], bits) else {
+                        return Outcome::error("ERR bit offset is not an integer or out of range");
+                    };
+                    self.expire_if_needed(db_index, &args[1]);
+                    let value = match self.dbs[db_index].get(&args[1]) {
+                        Some(entry) => match entry.value.as_string() {
+                            Some(bytes) => read_bitfield(bytes, offset, bits),
+                            None => return wrong_type(),
+                        },
+                        None => 0,
+                    };
+                    results.push(RespValue::Integer(bitfield_value(value, signed, bits)));
+                    index += 3;
+                }
+                "SET" | "INCRBY" => {
+                    if read_only {
+                        return Outcome::error("ERR BITFIELD_RO only supports the GET subcommand");
+                    }
+                    if index + 3 >= args.len() {
+                        return Outcome::error("ERR syntax error");
+                    }
+                    let Some((signed, bits)) = parse_bitfield_type(&args[index + 1]) else {
+                        return Outcome::error(
+                            "ERR Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.",
+                        );
+                    };
+                    let Some(offset) = self.parse_bitfield_offset(&args[index + 2], bits) else {
+                        return Outcome::error("ERR bit offset is not an integer or out of range");
+                    };
+                    let Ok(argument) = parse_i64(&args[index + 3]) else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    let mvcc = self.clock.next(self.now_ms());
+                    if !self.dbs[db_index].contains_key(&args[1]) {
+                        self.dbs[db_index].insert(&args[1], Value::String(Vec::new()), mvcc);
+                    }
+                    let Some(entry) = self.dbs[db_index].get_mut(&args[1]) else {
+                        return wrong_type();
+                    };
+                    entry.mvcc = mvcc;
+                    let value = Arc::make_mut(&mut entry.value);
+                    let Some(bytes) = value.as_string_mut() else {
+                        return wrong_type();
+                    };
+                    let old = read_bitfield(bytes, offset, bits);
+                    let old_value = bitfield_value(old, signed, bits);
+                    if operation == "SET" {
+                        let (minimum, maximum) = bitfield_limits(signed, bits);
+                        let requested = i128::from(argument);
+                        let stored = if requested < minimum || requested > maximum {
+                            match overflow {
+                                BitOverflow::Fail => {
+                                    results.push(RespValue::Null);
+                                    index += 4;
+                                    continue;
+                                }
+                                BitOverflow::Sat => {
+                                    if requested < minimum {
+                                        minimum
+                                    } else {
+                                        maximum
+                                    }
+                                }
+                                BitOverflow::Wrap => wrap_bitfield(requested, signed, bits),
+                            }
+                        } else {
+                            requested
+                        };
+                        ensure_bitfield_len(bytes, offset, bits);
+                        write_bitfield(bytes, offset, bits, stored, signed);
+                        results.push(RespValue::Integer(old_value));
+                    } else {
+                        let (minimum, maximum) = bitfield_limits(signed, bits);
+                        let new_value = i128::from(old_value) + i128::from(argument);
+                        let stored = if new_value < minimum || new_value > maximum {
+                            match overflow {
+                                BitOverflow::Fail => {
+                                    results.push(RespValue::Null);
+                                    index += 4;
+                                    continue;
+                                }
+                                BitOverflow::Sat => {
+                                    if new_value < minimum {
+                                        minimum
+                                    } else {
+                                        maximum
+                                    }
+                                }
+                                BitOverflow::Wrap => {
+                                    let masked = wrap_bitfield(new_value, signed, bits);
+                                    ensure_bitfield_len(bytes, offset, bits);
+                                    write_bitfield(bytes, offset, bits, masked, signed);
+                                    results.push(RespValue::Integer(bitfield_value(
+                                        masked as u64,
+                                        signed,
+                                        bits,
+                                    )));
+                                    index += 4;
+                                    continue;
+                                }
+                            }
+                        } else {
+                            new_value
+                        };
+                        ensure_bitfield_len(bytes, offset, bits);
+                        write_bitfield(bytes, offset, bits, stored, signed);
+                        results.push(RespValue::Integer(bitfield_value(
+                            stored as u64,
+                            signed,
+                            bits,
+                        )));
+                    }
+                    index += 4;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        Outcome::reply(RespValue::Array(results))
+    }
+
+    fn parse_bitfield_offset(&self, value: &[u8], bits: u8) -> Option<u64> {
+        let text = std::str::from_utf8(value).ok()?;
+        let (text, hash) = if let Some(rest) = text.strip_prefix('#') {
+            (rest, true)
+        } else {
+            (text, false)
+        };
+        let offset = text.parse::<i64>().ok()?;
+        if offset < 0 {
+            return None;
+        }
+        let offset = if hash {
+            offset.checked_mul(i64::from(bits))?
+        } else {
+            offset
+        };
+        let offset = u64::try_from(offset).ok()?;
+        if offset >> 3 >= self.configured_max_bulk_len() {
+            return None;
+        }
+        Some(offset)
     }
 
     fn cmd_setrange(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
@@ -3880,8 +4535,19 @@ impl State {
                     return wrong_args(args);
                 }
                 self.expire_if_needed(db_index, &args[2]);
-                if self.dbs[db_index].contains_key(&args[2]) {
-                    Outcome::reply(RespValue::Integer(if sub == "REFCOUNT" { 1 } else { 0 }))
+                if let Some(entry) = self.dbs[db_index].get(&args[2]) {
+                    let refcount =
+                        if sub == "REFCOUNT" {
+                            match entry.value.as_string().and_then(|bytes| {
+                                std::str::from_utf8(bytes).ok()?.parse::<i64>().ok()
+                            }) {
+                                Some(value) if (0..10_000).contains(&value) => 2_147_483_647,
+                                _ => 1,
+                            }
+                        } else {
+                            0
+                        };
+                    Outcome::reply(RespValue::Integer(refcount))
                 } else {
                     Outcome::error("ERR no such key")
                 }
@@ -4867,6 +5533,21 @@ impl State {
                     Err(err) => Outcome::error(format!("ERR {err}")),
                 }
             }
+            "DIGEST-VALUE" => {
+                if args.len() < 3 {
+                    return wrong_args(args);
+                }
+                let mut values = Vec::new();
+                for key in &args[2..] {
+                    self.expire_if_needed(client.db, key);
+                    let digest = match self.dbs[client.db].get(key) {
+                        Some(entry) => value_digest(&entry.value, entry.expire.primary().is_some()),
+                        None => "0".repeat(40),
+                    };
+                    values.push(RespValue::simple(digest));
+                }
+                Outcome::reply(RespValue::Array(values))
+            }
             "DIGEST" => {
                 if args.len() != 2 {
                     return wrong_args(args);
@@ -5225,10 +5906,10 @@ fn is_aof_write(name: &str) -> bool {
             | "INCRBY"
             | "DECRBY"
             | "INCRBYFLOAT"
+            | "MSETNX"
             | "GETSET"
             | "GETDEL"
             | "MSET"
-            | "MSETNX"
             | "DEL"
             | "UNLINK"
             | "EXPIRE"
@@ -5240,6 +5921,7 @@ fn is_aof_write(name: &str) -> bool {
             | "RENAMENX"
             | "MOVE"
             | "COPY"
+            | "SWAPDB"
             | "RESTORE"
             | "FLUSHDB"
             | "FLUSHALL"
@@ -5289,6 +5971,182 @@ fn is_aof_write(name: &str) -> bool {
             | "BZPOPMAX"
             | "SORT"
     )
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BitOverflow {
+    Wrap,
+    Sat,
+    Fail,
+}
+
+fn parse_memory(text: &str) -> Option<u64> {
+    let text = text.trim().to_ascii_lowercase();
+    let (value, multiplier) = if let Some(value) = text.strip_suffix("kb") {
+        (value, 1024u64)
+    } else if let Some(value) = text.strip_suffix("mb") {
+        (value, 1024 * 1024)
+    } else if let Some(value) = text.strip_suffix("gb") {
+        (value, 1024 * 1024 * 1024)
+    } else {
+        (text.as_str(), 1)
+    };
+    value.parse::<u64>().ok()?.checked_mul(multiplier)
+}
+
+fn parse_bitfield_type(value: &[u8]) -> Option<(bool, u8)> {
+    let text = std::str::from_utf8(value).ok()?;
+    let (signed, number) = match text.as_bytes().first()? {
+        b'i' => (true, &text[1..]),
+        b'u' => (false, &text[1..]),
+        _ => return None,
+    };
+    let bits = number.parse::<u8>().ok()?;
+    if bits == 0 || bits > 64 || (!signed && bits == 64) {
+        return None;
+    }
+    Some((signed, bits))
+}
+
+fn read_bitfield(bytes: &[u8], offset: u64, bits: u8) -> u64 {
+    let mut value = 0u64;
+    for index in 0..u64::from(bits) {
+        value <<= 1;
+        let bit_position = offset + index;
+        let byte = bytes.get((bit_position / 8) as usize).copied().unwrap_or(0);
+        if byte & (1 << (7 - bit_position % 8)) != 0 {
+            value |= 1;
+        }
+    }
+    value
+}
+
+fn ensure_bitfield_len(bytes: &mut Vec<u8>, offset: u64, bits: u8) {
+    let needed = (offset + u64::from(bits)).div_ceil(8) as usize;
+    if bytes.len() < needed {
+        bytes.resize(needed, 0);
+    }
+}
+
+fn write_bitfield(bytes: &mut [u8], offset: u64, bits: u8, value: i128, _signed: bool) {
+    let raw = (value as u64) & bitfield_mask(bits);
+    for index in 0..u64::from(bits) {
+        let target = bits as u64 - 1 - index;
+        let bit_position = offset + index;
+        let byte_index = (bit_position / 8) as usize;
+        let mask = 1 << (7 - bit_position % 8);
+        if raw & (1 << target) != 0 {
+            bytes[byte_index] |= mask;
+        } else {
+            bytes[byte_index] &= !mask;
+        }
+    }
+}
+
+fn bitfield_mask(bits: u8) -> u64 {
+    if bits == 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    }
+}
+
+fn bitfield_limits(signed: bool, bits: u8) -> (i128, i128) {
+    if signed {
+        let half = 1i128 << (bits - 1);
+        (-half, half - 1)
+    } else {
+        (0, (1i128 << bits) - 1)
+    }
+}
+
+fn bitfield_value(raw: u64, signed: bool, bits: u8) -> i64 {
+    let raw = raw & bitfield_mask(bits);
+    if signed {
+        let sign = 1u64 << (bits - 1);
+        if raw & sign != 0 {
+            (raw as i128 - (1i128 << bits)) as i64
+        } else {
+            raw as i64
+        }
+    } else {
+        raw as i64
+    }
+}
+
+fn wrap_bitfield(value: i128, signed: bool, bits: u8) -> i128 {
+    let mask = (1i128 << bits) - 1;
+    let raw = value & mask;
+    if signed {
+        let sign = 1i128 << (bits - 1);
+        if raw & sign != 0 {
+            raw - (1i128 << bits)
+        } else {
+            raw
+        }
+    } else {
+        raw
+    }
+}
+
+fn shift_bits(source: &[u8], shift: i64) -> Vec<u8> {
+    let maxlen = source.len() as i64;
+    if shift >= 0 {
+        let byteoffset = (shift / 8) as usize;
+        let bitshift = (shift % 8) as u32;
+        let mut length = maxlen + (shift / 8);
+        if bitshift != 0 {
+            length += 1;
+        }
+        let mut result = vec![0u8; length.max(0) as usize];
+        let src_len = (length - byteoffset as i64 - i64::from(bitshift != 0)).max(0) as usize;
+        let mut carry = 0u8;
+        for index in 0..src_len {
+            let byte = *source.get(index).unwrap_or(&0);
+            result[byteoffset + index] = (byte << bitshift) | carry;
+            carry = if bitshift == 0 {
+                0
+            } else {
+                byte >> (8 - bitshift)
+            };
+        }
+        if bitshift != 0
+            && let Some(last) = result.last_mut()
+        {
+            *last = carry;
+        }
+        result
+    } else {
+        let shift = shift.unsigned_abs() as i64;
+        let byteoffset_base = (shift / 8) as usize;
+        let bitshift = (shift % 8) as u32;
+        let mut byteoffset = byteoffset_base;
+        if bitshift != 0 {
+            byteoffset += 1;
+        }
+        let length = (maxlen - (shift / 8)).max(0) as usize;
+        let mut result = vec![0u8; length];
+        if length == 0 {
+            return result;
+        }
+        let first = *source.get(byteoffset).unwrap_or(&0);
+        let previous = *source.get(byteoffset.saturating_sub(1)).unwrap_or(&0);
+        result[0] = if bitshift == 0 {
+            previous
+        } else {
+            (first << (8 - bitshift)) | (previous >> bitshift)
+        };
+        for (index, slot) in result.iter_mut().enumerate().skip(1) {
+            let current = *source.get(byteoffset + index).unwrap_or(&0);
+            let previous = *source.get(byteoffset + index - 1).unwrap_or(&0);
+            *slot = if bitshift == 0 {
+                previous
+            } else {
+                (current << (8 - bitshift)) | (previous >> bitshift)
+            };
+        }
+        result
+    }
 }
 
 fn format_float(value: f64) -> String {
@@ -5435,8 +6293,15 @@ fn is_modifiable_config(key: &str) -> bool {
             | "hz"
             | "appendonly"
             | "appendfsync"
+            | "proto-max-bulk-len"
             | "aof-use-rdb-preamble"
             | "aof-load-truncated"
+            | "repl-ping-replica-period"
+            | "repl-timeout"
+            | "repl-diskless-sync"
+            | "repl-disable-tcp-nodelay"
+            | "replica-read-only"
+            | "replica-serve-stale-data"
             | "auto-aof-rewrite-percentage"
             | "auto-aof-rewrite-min-size"
             | "no-appendfsync-on-rewrite"

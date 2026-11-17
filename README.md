@@ -19,7 +19,8 @@ Bootstrap / P0. Working today:
 - a `mio` event loop with a global state lock and batched command execution;
 - an MVCC snapshot database with tombstones, nested read views, COW values,
   and KeyDB-compatible timestamps;
-- strings, lists, hashes, sets, sorted sets, expiry, keyspace commands,
+- strings (including bitmaps/BITFIELD), lists, hashes, sets, sorted sets,
+  expiry, keyspace commands,
   `OBJECT ENCODING`,
   `DEBUG MVCC`, `DEBUG PROTOCOL`, `HELLO`, `CLIENT`, `CONFIG`, `INFO`, basic
   `MULTI`/`EXEC`/`WATCH`, `SORT`, and a conformance harness passing all 22

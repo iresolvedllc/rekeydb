@@ -68,9 +68,17 @@ AOF coverage:
   incomplete MULTI handling, bad-format detection, `keydb-check-aof`, SPOP,
   EXPIREAT, and fsync timing.
 
+Additional suites in progress:
+
+- `unit/bitops.tcl`: **53/53 pass**;
+- `unit/bitfield.tcl`: 13 core tests pass, then replication setup is required;
+- `unit/type/incr.tcl`: **24/24 pass**;
+- `unit/type/string.tcl`: 19 pass before replication-stream helpers;
+- `unit/keyspace.tcl`: 39 pass before streams are required.
+
 ## Next
 
-- Streams, HLL, GEO, bitfield/bitpos/BITOP breadth.
+- Streams, HLL, GEO.
 - `KEYDB.NHGET`/`NHSET` nested hashes.
 - AOF RDB preamble support and automatic rewrite thresholds.
 - Compact RDB output (quicklist/ziplist/intset/hash-ziplist/zset-ziplist) for

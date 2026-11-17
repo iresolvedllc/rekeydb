@@ -33,6 +33,12 @@ where
         .collect()
 }
 
+pub fn value_digest(value: &Value, has_expire: bool) -> String {
+    let mut digest = [0u8; 20];
+    xor_object_digest(&mut digest, value, has_expire);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn xor_object_digest(digest: &mut [u8; 20], value: &Value, has_expire: bool) {
     let type_id = match value {
         Value::String(_) => 0u32,
