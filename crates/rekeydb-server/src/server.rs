@@ -8,7 +8,8 @@
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mio::net::{TcpListener, TcpStream};
@@ -16,6 +17,7 @@ use mio::{Events, Interest, Poll, Token};
 use rekeydb_protocol::{ProtocolError, RespDecoder, RespValue, RespVersion};
 
 use crate::config::Config;
+use crate::replication::{ReplicaHandle, spawn as spawn_replica};
 use crate::state::{BlockKind, BlockRequest, ClientContext, State};
 
 const LISTENER: Token = Token(0);
@@ -35,6 +37,7 @@ struct Client {
     close_after_flush: bool,
     shutdown_after_flush: bool,
     blocked: Option<BlockedClient>,
+    replica: bool,
 }
 
 impl Client {
@@ -47,6 +50,7 @@ impl Client {
             close_after_flush: false,
             shutdown_after_flush: false,
             blocked: None,
+            replica: false,
         }
     }
 }
@@ -103,10 +107,12 @@ pub fn run(config: Config) -> Result<(), String> {
         listener,
         clients: HashMap::new(),
         blocked: Vec::new(),
-        state: Mutex::new(state),
+        state: Arc::new(Mutex::new(state)),
         next_token: 1,
         next_client_id: 1,
         running: true,
+        our_port: config.port,
+        replica_handle: None,
         trace_commands: std::env::var_os("REKEYDB_TRACE_COMMANDS").is_some(),
         trace_names: std::env::var_os("REKEYDB_TRACE_NAMES").is_some(),
     };
@@ -125,10 +131,12 @@ struct Server {
     listener: TcpListener,
     clients: HashMap<Token, Client>,
     blocked: Vec<Token>,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
     next_token: usize,
     next_client_id: u64,
     running: bool,
+    our_port: u16,
+    replica_handle: Option<ReplicaHandle>,
     trace_commands: bool,
     trace_names: bool,
 }
@@ -168,6 +176,7 @@ impl Server {
                 }
             }
         }
+        self.stop_replication();
         Ok(())
     }
 
@@ -283,9 +292,28 @@ impl Server {
                     String::from_utf8_lossy(&command.args[0])
                 );
             }
+            let name = String::from_utf8_lossy(&command.args[0]).to_ascii_uppercase();
+            if name == "SYNC" || name == "PSYNC" {
+                self.handle_sync_command(&mut client, &name);
+                continue;
+            }
+            if name == "REPLCONF"
+                && command.args.len() >= 3
+                && command.args[1].eq_ignore_ascii_case(b"ACK")
+            {
+                if let Ok(offset) = String::from_utf8_lossy(&command.args[2]).parse::<i64>() {
+                    let mut state = self.state.lock().expect("state poisoned");
+                    state.update_replica_ack(client.ctx.id, offset);
+                }
+                continue;
+            }
             let mut state = self.state.lock().expect("state poisoned");
             let outcome = state.execute(&command, &mut client.ctx);
+            let replication_output = state.take_replication_output();
             drop(state);
+            if !replication_output.is_empty() {
+                self.broadcast_replication(&replication_output);
+            }
             let mut reply = outcome.reply;
             if let Some((id, as_error)) = outcome.unblock
                 && !self.unblock_by_id(id, as_error)
@@ -317,6 +345,8 @@ impl Server {
             wakes.extend(outcome.wake);
         }
 
+        self.apply_pending_replicaof();
+
         self.state
             .lock()
             .expect("state poisoned")
@@ -333,6 +363,86 @@ impl Server {
 
         for (db, key) in wakes {
             self.wake_blocked(db, &key);
+        }
+    }
+
+    fn handle_sync_command(&mut self, client: &mut Client, name: &str) {
+        let mut state = self.state.lock().expect("state poisoned");
+        let payload = state.replication_payload();
+        match payload {
+            Ok((replid, offset, payload)) => {
+                state.register_replica(client.ctx.id);
+                drop(state);
+                let mut handshake = Vec::new();
+                if name == "PSYNC" {
+                    handshake
+                        .extend_from_slice(format!("+FULLRESYNC {replid} {offset}\r\n").as_bytes());
+                }
+                handshake.extend_from_slice(format!("${}\r\n", payload.len()).as_bytes());
+                handshake.extend_from_slice(&payload);
+                client.out.extend_from_slice(&handshake);
+                client.replica = true;
+            }
+            Err(err) => {
+                drop(state);
+                client
+                    .out
+                    .extend_from_slice(format!("-ERR {err}\r\n").as_bytes());
+            }
+        }
+    }
+
+    fn broadcast_replication(&mut self, bytes: &[u8]) {
+        let tokens: Vec<Token> = self
+            .clients
+            .iter()
+            .filter(|(_, client)| client.replica)
+            .map(|(token, _)| *token)
+            .collect();
+        for token in tokens {
+            if let Some(mut client) = self.clients.remove(&token) {
+                client.out.extend_from_slice(bytes);
+                self.flush_client_inner(token, client);
+            }
+        }
+    }
+
+    fn apply_pending_replicaof(&mut self) {
+        let request = {
+            let mut state = self.state.lock().expect("state poisoned");
+            state.take_replicaof_request()
+        };
+        let Some(request) = request else {
+            return;
+        };
+        self.stop_replication();
+        if let Some((host, port)) = request {
+            let timeout = {
+                let state = self.state.lock().expect("state poisoned");
+                state.replication_timeout_seconds().unwrap_or(60).max(1)
+            };
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let join = spawn_replica(
+                self.state.clone(),
+                host,
+                port,
+                self.our_port,
+                std::time::Duration::from_secs(timeout),
+                shutdown.clone(),
+            );
+            self.replica_handle = Some(ReplicaHandle {
+                shutdown,
+                join: Some(join),
+            });
+        }
+    }
+
+    fn stop_replication(&mut self) {
+        if let Some(handle) = self.replica_handle.take() {
+            handle.shutdown.store(true, Ordering::SeqCst);
+            if let Some(join) = handle.join {
+                let _ = join.join();
+            }
         }
     }
 
@@ -362,15 +472,19 @@ impl Server {
                 self.clients.insert(token, client);
                 continue;
             };
-            let moved_destination = if blocked.request.kind == BlockKind::Move {
+            let moved_destination = if matches!(&blocked.request.kind, BlockKind::Move { .. }) {
                 blocked.request.destination.clone()
             } else {
                 None
             };
-            let reply = {
+            let (reply, replication_output) = {
                 let mut state = self.state.lock().expect("state poisoned");
-                state.serve_blocked(&blocked.request)
+                let reply = state.serve_blocked(&blocked.request);
+                (reply, state.take_replication_output())
             };
+            if !replication_output.is_empty() {
+                self.broadcast_replication(&replication_output);
+            }
             let Some(reply) = reply else {
                 client.blocked = Some(blocked);
                 self.restore_blocked(position, token);
@@ -412,7 +526,7 @@ impl Server {
                 BlockKind::Pop | BlockKind::ZPop { .. } | BlockKind::StreamRead(_) => {
                     RespValue::NullArray
                 }
-                BlockKind::Move => RespValue::null(),
+                BlockKind::Move { .. } => RespValue::null(),
             };
             reply.encode(client.ctx.version, &mut client.out);
             self.process_client(token, client, 0);
@@ -462,7 +576,7 @@ impl Server {
                 BlockKind::Pop | BlockKind::ZPop { .. } | BlockKind::StreamRead(_) => {
                     RespValue::NullArray
                 }
-                BlockKind::Move => RespValue::null(),
+                BlockKind::Move { .. } => RespValue::null(),
             }
         };
         reply.encode(client.ctx.version, &mut client.out);

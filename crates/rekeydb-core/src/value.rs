@@ -536,11 +536,13 @@ pub fn format_double_17g(value: f64) -> String {
     }
     let decimals = (17 - 1 - exponent).max(0) as usize;
     let mut text = format!("{value:.decimals$}");
-    while text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
     }
     if text == "-0" {
         text = "0".to_string();
@@ -568,6 +570,27 @@ mod tests {
         assert_eq!(ints.encoding(limits), "intset");
         let strings = Value::Set([b"one".to_vec(), b"two".to_vec()].into_iter().collect());
         assert_eq!(strings.encoding(limits), "hashtable");
+    }
+
+    #[test]
+    fn format_double_17g_roundtrips() {
+        let mut state = 0x1234_5678_9abc_def0u64;
+        for _ in 0..200_000 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let value = f64::from_bits(state);
+            if !value.is_finite() || value == 0.0 {
+                continue;
+            }
+            let text = format_double_17g(value);
+            let parsed = text.parse::<f64>().unwrap_or_else(|_| panic!("bad {text}"));
+            assert_eq!(
+                parsed.to_bits(),
+                value.to_bits(),
+                "{value:?} formatted as {text} parsed as {parsed:?}"
+            );
+        }
     }
 
     #[test]

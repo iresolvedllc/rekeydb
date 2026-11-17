@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -9,7 +9,7 @@ use rekeydb_core::{
 };
 use rekeydb_persist::aof::{self, AofFsync, AofWriter};
 use rekeydb_persist::{RdbEntry, dataset_digest, dump, load, restore, save, value_digest};
-use rekeydb_protocol::{Command, RespValue, RespVersion};
+use rekeydb_protocol::{Command, RespValue, RespVersion, encode_command};
 
 use crate::config::Config;
 use crate::geo;
@@ -51,7 +51,7 @@ pub enum ListSide {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockKind {
     Pop,
-    Move,
+    Move { rpoplpush: bool },
     ZPop { max: bool },
     StreamRead(StreamBlock),
 }
@@ -136,6 +136,51 @@ pub struct Stats {
     pub keyspace_misses: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplicationRole {
+    Master,
+    Replica,
+}
+
+#[derive(Debug, Clone)]
+struct ReplicationState {
+    role: ReplicationRole,
+    replid: String,
+    offset: i64,
+    selected_db: Option<usize>,
+    pending: Vec<u8>,
+    clients: BTreeMap<u64, i64>,
+    master_host: String,
+    master_port: u16,
+    master_replid: String,
+    link_status: String,
+    sync_in_progress: bool,
+    last_io_ms: i64,
+    pending_replicaof: Option<Option<(String, u16)>>,
+    replaying: bool,
+}
+
+impl Default for ReplicationState {
+    fn default() -> Self {
+        Self {
+            role: ReplicationRole::Master,
+            replid: new_replid(),
+            offset: 0,
+            selected_db: None,
+            pending: Vec::new(),
+            clients: BTreeMap::new(),
+            master_host: String::new(),
+            master_port: 0,
+            master_replid: String::new(),
+            link_status: "down".to_string(),
+            sync_in_progress: false,
+            last_io_ms: 0,
+            pending_replicaof: None,
+            replaying: false,
+        }
+    }
+}
+
 pub struct State {
     pub config: Config,
     dbs: Vec<Database<Value>>,
@@ -160,6 +205,9 @@ pub struct State {
     client_names: BTreeMap<u64, Vec<u8>>,
     pub connected_clients: usize,
     pub blocked_clients: usize,
+    replication: ReplicationState,
+    raw_string_keys: BTreeSet<(usize, Vec<u8>)>,
+    command_calls: BTreeMap<String, u64>,
 }
 
 impl State {
@@ -188,10 +236,15 @@ impl State {
             "repl-ping-replica-period",
             "repl-timeout",
             "repl-diskless-sync",
+            "repl-diskless-sync-delay",
+            "repl-diskless-load",
+            "repl-backlog-size",
             "repl-disable-tcp-nodelay",
             "replica-read-only",
             "replica-serve-stale-data",
             "daemonize",
+            "loglevel",
+            "lua-time-limit",
             "protected-mode",
             "maxmemory",
             "maxmemory-policy",
@@ -244,6 +297,9 @@ impl State {
             client_names: BTreeMap::new(),
             connected_clients: 0,
             blocked_clients: 0,
+            replication: ReplicationState::default(),
+            raw_string_keys: BTreeSet::new(),
+            command_calls: BTreeMap::new(),
         };
         state.refresh_config_values();
         state
@@ -291,6 +347,21 @@ impl State {
         self.config_values
             .entry("stream-node-max-entries".into())
             .or_insert_with(|| "100".into());
+        for (key, value) in [
+            ("repl-ping-replica-period", "10"),
+            ("repl-timeout", "60"),
+            ("repl-diskless-sync", "yes"),
+            ("repl-diskless-sync-delay", "5"),
+            ("repl-diskless-load", "disabled"),
+            ("repl-disable-tcp-nodelay", "no"),
+            ("repl-backlog-size", "1048576"),
+            ("replica-read-only", "yes"),
+            ("replica-serve-stale-data", "yes"),
+        ] {
+            self.config_values
+                .entry(key.into())
+                .or_insert_with(|| value.into());
+        }
         self.config_values.insert(
             "aof-use-rdb-preamble".into(),
             if self.config.aof_use_rdb_preamble {
@@ -311,6 +382,8 @@ impl State {
         );
         for (key, value) in [
             ("daemonize", "no"),
+            ("loglevel", "notice"),
+            ("lua-time-limit", "5000"),
             ("protected-mode", "yes"),
             ("maxmemory", "0"),
             ("maxmemory-policy", "noeviction"),
@@ -345,6 +418,167 @@ impl State {
     /// Test hook for deterministic TTLs.
     pub fn set_now_ms(&mut self, now_ms: i64) {
         self.now_override = Some(now_ms);
+    }
+
+    pub fn replication_role(&self) -> ReplicationRole {
+        self.replication.role
+    }
+
+    pub fn replication_offset(&self) -> i64 {
+        self.replication.offset
+    }
+
+    pub fn replication_timeout_seconds(&self) -> Option<u64> {
+        self.config_values
+            .get("repl-timeout")
+            .and_then(|value| value.parse::<u64>().ok())
+    }
+
+    pub fn replication_id(&self) -> &str {
+        &self.replication.replid
+    }
+
+    pub fn master_link_status(&self) -> &str {
+        &self.replication.link_status
+    }
+
+    pub fn master_address(&self) -> (String, u16) {
+        (
+            self.replication.master_host.clone(),
+            self.replication.master_port,
+        )
+    }
+
+    pub fn master_offset(&self) -> i64 {
+        self.replication.offset
+    }
+
+    pub fn replica_acked(&self) -> usize {
+        self.replication.clients.len()
+    }
+
+    pub fn request_replicaof(&mut self, host: String, port: u16) {
+        self.replication.role = ReplicationRole::Replica;
+        self.replication.master_host = host.clone();
+        self.replication.master_port = port;
+        self.replication.link_status = "down".to_string();
+        self.replication.sync_in_progress = true;
+        self.replication.master_replid.clear();
+        self.replication.pending_replicaof = Some(Some((host, port)));
+    }
+
+    pub fn request_promotion(&mut self) {
+        self.replication.role = ReplicationRole::Master;
+        self.replication.replid = new_replid();
+        self.replication.master_replid.clear();
+        self.replication.master_host.clear();
+        self.replication.master_port = 0;
+        self.replication.link_status = "down".to_string();
+        self.replication.sync_in_progress = false;
+        self.replication.pending_replicaof = Some(None);
+    }
+
+    pub fn take_replicaof_request(&mut self) -> Option<Option<(String, u16)>> {
+        self.replication.pending_replicaof.take()
+    }
+
+    pub fn replication_payload(&mut self) -> Result<(String, i64, Vec<u8>), String> {
+        let entries = self.aof_entries();
+        let payload = aof::encode_entries(&entries);
+        self.replication.selected_db = None;
+        Ok((
+            self.replication.replid.clone(),
+            self.replication.offset,
+            payload,
+        ))
+    }
+
+    pub fn register_replica(&mut self, client_id: u64) {
+        self.replication.clients.insert(client_id, -1);
+    }
+
+    pub fn update_replica_ack(&mut self, client_id: u64, offset: i64) {
+        self.replication.clients.insert(client_id, offset);
+    }
+
+    pub fn take_replication_output(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.replication.pending)
+    }
+
+    pub fn set_master_link_up(&mut self, replid: String, offset: i64) {
+        self.replication.master_replid = replid;
+        self.replication.link_status = "up".to_string();
+        self.replication.sync_in_progress = false;
+        self.replication.offset = offset;
+        self.replication.last_io_ms = now_unix_ms();
+    }
+
+    pub fn set_master_link_down(&mut self) {
+        self.replication.link_status = "down".to_string();
+        self.replication.sync_in_progress = true;
+    }
+
+    pub fn set_master_offset(&mut self, offset: i64) {
+        self.replication.offset = offset;
+        self.replication.last_io_ms = now_unix_ms();
+    }
+
+    pub fn apply_full_sync(
+        &mut self,
+        payload: &[u8],
+        replid: String,
+        offset: i64,
+    ) -> Result<(), String> {
+        for db in &mut self.dbs {
+            db.clear();
+        }
+        if payload.starts_with(b"REDIS") {
+            let entries = load(payload).map_err(|err| err.to_string())?;
+            let now = self.now_ms();
+            for entry in entries {
+                let mut expire = ExpireEntry::new();
+                if let Some(when) = entry.expire_ms {
+                    expire.set_primary(when);
+                }
+                let mvcc = self.clock.next(now);
+                self.dbs[entry.db].insert_entry(
+                    entry.key,
+                    Entry::with_expire(Arc::new(entry.value), expire, mvcc),
+                );
+            }
+        } else {
+            let mut decoder = rekeydb_protocol::RespDecoder::default();
+            decoder.feed(payload);
+            let mut client = ClientContext::new(0, "master".to_string());
+            loop {
+                match decoder.next_command() {
+                    Ok(Some(command)) => {
+                        let outcome = self.execute_from_master(&command, &mut client);
+                        if let RespValue::Error(error) = outcome.reply {
+                            return Err(format!(
+                                "full sync command failed: {}",
+                                String::from_utf8_lossy(&error)
+                            ));
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(err) => return Err(format!("full sync payload: {err}")),
+                }
+            }
+        }
+        self.set_master_link_up(replid, offset);
+        Ok(())
+    }
+
+    pub fn execute_from_master(
+        &mut self,
+        command: &Command,
+        client: &mut ClientContext,
+    ) -> Outcome {
+        self.replication.replaying = true;
+        let outcome = self.execute(command, client);
+        self.replication.replaying = false;
+        outcome
     }
 
     pub fn stats(&self) -> &Stats {
@@ -383,7 +617,7 @@ impl State {
         let db = client.db;
         let outcome = self.execute_inner(command, client);
         if !self.loading
-            && self.aof.is_some()
+            && (self.aof.is_some() || !self.replication.clients.is_empty())
             && outcome.block.is_none()
             && !matches!(outcome.reply, RespValue::Error(_))
             && !matches!(&outcome.reply, RespValue::SimpleString(value) if value == b"QUEUED")
@@ -400,6 +634,19 @@ impl State {
         }
         let name = String::from_utf8_lossy(&args[0]).to_ascii_uppercase();
         self.stats.total_commands_processed += 1;
+        *self.command_calls.entry(name.clone()).or_insert(0) += 1;
+        if self.replication.role == ReplicationRole::Replica
+            && !self.replication.replaying
+            && !matches!(name.as_str(), "SLAVEOF" | "REPLICAOF" | "REPLCONF")
+            && self
+                .config_values
+                .get("replica-read-only")
+                .map(|value| !value.eq_ignore_ascii_case("no"))
+                .unwrap_or(true)
+            && is_aof_write(&name)
+        {
+            return Outcome::error("READONLY You can't write against a read only replica.");
+        }
 
         if name == "MULTI" {
             if args.len() != 1 {
@@ -467,7 +714,7 @@ impl State {
                         BlockKind::Pop | BlockKind::ZPop { .. } | BlockKind::StreamRead(_) => {
                             RespValue::NullArray
                         }
-                        BlockKind::Move => RespValue::null(),
+                        BlockKind::Move { .. } => RespValue::null(),
                     });
                 } else {
                     replies.push(outcome.reply);
@@ -711,6 +958,12 @@ impl State {
                 self.cmd_zset(&name, args, client.db, client.version)
             }
             "BZPOPMIN" | "BZPOPMAX" => self.cmd_bzpop(&name, args, client.db),
+            "SLAVEOF" | "REPLICAOF" => self.cmd_replicaof(args),
+            "REPLCONF" => self.cmd_replconf(args),
+            "ROLE" => self.cmd_role(),
+            "LFENCE" => Outcome::ok(),
+            "STRALGO" => self.cmd_stralgo(args, client.db),
+            "WAIT" => self.cmd_wait(args),
             "PFADD" => self.cmd_pfadd(args, client.db),
             "PFCOUNT" => self.cmd_pfcount(args, client.db),
             "PFMERGE" => self.cmd_pfmerge(args, client.db),
@@ -859,12 +1112,6 @@ impl State {
             "CLIENT" => self.cmd_client(args, client),
             "HELLO" => self.cmd_hello(args, client),
             "AUTH" => self.cmd_auth(args),
-            "ROLE" => Outcome::reply(RespValue::Array(vec![
-                RespValue::bulk(b"master".to_vec()),
-                RespValue::Integer(0),
-                RespValue::Array(Vec::new()),
-            ])),
-            "WAIT" => Outcome::reply(RespValue::Integer(0)),
             "LASTSAVE" => Outcome::reply(RespValue::Integer(self.start_unix)),
             "TIME" => {
                 let now = self.now_ms();
@@ -1142,6 +1389,184 @@ impl State {
         Outcome::ok()
     }
 
+    fn cmd_stralgo(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        if !args[1].eq_ignore_ascii_case(b"lcs") {
+            return Outcome::error("ERR syntax error");
+        }
+        let mut getlen = false;
+        let mut getidx = false;
+        let mut withmatchlen = false;
+        let mut minmatchlen = 0usize;
+        let mut strings: Option<(Vec<u8>, Vec<u8>)> = None;
+        let mut index = 2;
+        while index < args.len() {
+            let remaining = args.len() - 1 - index;
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "IDX" => {
+                    getidx = true;
+                    index += 1;
+                }
+                "LEN" => {
+                    getlen = true;
+                    index += 1;
+                }
+                "WITHMATCHLEN" => {
+                    withmatchlen = true;
+                    index += 1;
+                }
+                "MINMATCHLEN" if remaining > 0 => {
+                    let Ok(value) = parse_i64(&args[index + 1]) else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    minmatchlen = value.max(0) as usize;
+                    index += 2;
+                }
+                "STRINGS" if remaining > 1 => {
+                    if strings.is_some() {
+                        return Outcome::error("ERR Either use STRINGS or KEYS");
+                    }
+                    strings = Some((args[index + 1].clone(), args[index + 2].clone()));
+                    index += 3;
+                }
+                "KEYS" if remaining > 1 => {
+                    if strings.is_some() {
+                        return Outcome::error("ERR Either use STRINGS or KEYS");
+                    }
+                    let mut values = Vec::with_capacity(2);
+                    for key in &args[index + 1..index + 3] {
+                        self.expire_if_needed(db_index, key);
+                        let value = match self.dbs[db_index].get(key) {
+                            Some(entry) => match entry.value.as_string() {
+                                Some(bytes) => bytes.clone(),
+                                None => {
+                                    return Outcome::error(
+                                        "ERR The specified keys must contain string values",
+                                    );
+                                }
+                            },
+                            None => Vec::new(),
+                        };
+                        values.push(value);
+                    }
+                    strings = Some((values[0].clone(), values[1].clone()));
+                    index += 3;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        let Some((a, b)) = strings else {
+            return Outcome::error(
+                "ERR Please specify two strings: STRINGS or KEYS options are mandatory",
+            );
+        };
+        if getlen && getidx {
+            return Outcome::error(
+                "ERR If you want both the length and indexes, please just use IDX.",
+            );
+        }
+        if a.len() >= u32::MAX as usize - 1 || b.len() >= u32::MAX as usize - 1 {
+            return Outcome::error("ERR String too long for LCS");
+        }
+        let alen = a.len();
+        let blen = b.len();
+        let width = blen + 1;
+        let mut table = vec![0u32; (alen + 1) * width];
+        for i in 1..=alen {
+            for j in 1..=blen {
+                table[i * width + j] = if a[i - 1] == b[j - 1] {
+                    table[(i - 1) * width + j - 1] + 1
+                } else {
+                    table[(i - 1) * width + j].max(table[i * width + j - 1])
+                };
+            }
+        }
+        let lcs_len = table[alen * width + blen] as usize;
+        let compute = getidx || !getlen;
+        let mut result = vec![0u8; lcs_len];
+        let mut matches: Vec<RespValue> = Vec::new();
+        let mut a_start = alen;
+        let mut a_end = 0usize;
+        let mut b_start = 0usize;
+        let mut b_end = 0usize;
+        let mut i = alen;
+        let mut j = blen;
+        let mut idx = lcs_len;
+        while compute && i > 0 && j > 0 {
+            let mut emit = false;
+            if a[i - 1] == b[j - 1] {
+                idx -= 1;
+                result[idx] = a[i - 1];
+                if a_start == alen {
+                    a_start = i - 1;
+                    a_end = i - 1;
+                    b_start = j - 1;
+                    b_end = j - 1;
+                } else if a_start == i && b_start == j {
+                    a_start -= 1;
+                    b_start -= 1;
+                } else {
+                    emit = true;
+                }
+                if a_start == 0 || b_start == 0 {
+                    emit = true;
+                }
+                i -= 1;
+                j -= 1;
+            } else {
+                let first = table[(i - 1) * width + j];
+                let second = table[i * width + j - 1];
+                if first > second {
+                    i -= 1;
+                } else {
+                    j -= 1;
+                }
+                if a_start != alen {
+                    emit = true;
+                }
+            }
+            if emit {
+                let match_len = a_end - a_start + 1;
+                if minmatchlen == 0 || match_len >= minmatchlen {
+                    let mut item = vec![
+                        RespValue::Array(vec![
+                            RespValue::Integer(a_start as i64),
+                            RespValue::Integer(a_end as i64),
+                        ]),
+                        RespValue::Array(vec![
+                            RespValue::Integer(b_start as i64),
+                            RespValue::Integer(b_end as i64),
+                        ]),
+                    ];
+                    if withmatchlen {
+                        item.push(RespValue::Integer(match_len as i64));
+                    }
+                    matches.push(RespValue::Array(item));
+                }
+                a_start = alen;
+            }
+        }
+        if getidx {
+            return Outcome::reply(RespValue::Map(vec![
+                (
+                    RespValue::bulk(b"matches".to_vec()),
+                    RespValue::Array(matches),
+                ),
+                (
+                    RespValue::bulk(b"len".to_vec()),
+                    RespValue::Integer(lcs_len as i64),
+                ),
+            ]));
+        }
+        if getlen {
+            return Outcome::reply(RespValue::Integer(lcs_len as i64));
+        }
+        Outcome::reply(RespValue::bulk(result))
+    }
+
     fn cmd_set(&mut self, args: &[Vec<u8>], client: &mut ClientContext) -> Outcome {
         if args.len() < 3 {
             return wrong_args(args);
@@ -1196,6 +1621,9 @@ impl State {
         if nx && xx {
             return Outcome::error("ERR syntax error");
         }
+        if nx && get {
+            return Outcome::error("ERR syntax error");
+        }
         if expire_at.is_some_and(|when| when <= now) {
             return Outcome::error("ERR invalid expire time in set");
         }
@@ -1231,6 +1659,7 @@ impl State {
             expire
         };
         let mvcc = self.clock.next(now);
+        self.raw_string_keys.remove(&(client.db, args[1].clone()));
         self.dbs[client.db].insert_entry(
             args[1].clone(),
             Entry::with_expire(Arc::new(Value::String(args[2].clone())), expire, mvcc),
@@ -1866,11 +2295,32 @@ impl State {
         if args.len() != 4 {
             return wrong_args(args);
         }
-        let Ok(offset) = parse_usize(&args[2]) else {
-            return Outcome::error("ERR value is not an integer or out of range");
+        let offset = match parse_i64(&args[2]) {
+            Ok(offset) if offset >= 0 => offset as usize,
+            _ => return Outcome::error("ERR offset is out of range"),
         };
-        if offset > 512 * 1024 * 1024 {
-            return Outcome::error("ERR string exceeds maximum allowed size (proto-max-bulk-len)");
+        let max_len = self.configured_max_bulk_len() as usize;
+        let end = match offset.checked_add(args[3].len()) {
+            Some(end) if end <= max_len => end,
+            _ => {
+                return Outcome::error(
+                    "ERR string exceeds maximum allowed size (proto-max-bulk-len)",
+                );
+            }
+        };
+        self.expire_if_needed(db_index, &args[1]);
+        let existing = self.dbs[db_index].get(&args[1]);
+        if args[3].is_empty() {
+            return match existing {
+                Some(entry) => match entry.value.as_string() {
+                    Some(bytes) => Outcome::reply(RespValue::Integer(bytes.len() as i64)),
+                    None => wrong_type(),
+                },
+                None => Outcome::reply(RespValue::Integer(0)),
+            };
+        }
+        if existing.is_some_and(|entry| entry.value.as_string().is_none()) {
+            return wrong_type();
         }
         let mvcc = self.clock.next(self.now_ms());
         if !self.dbs[db_index].contains_key(&args[1]) {
@@ -1884,15 +2334,13 @@ impl State {
         let Some(bytes) = value.as_string_mut() else {
             return wrong_type();
         };
-        if args[3].is_empty() {
-            return Outcome::reply(RespValue::Integer(bytes.len() as i64));
-        }
-        let end = offset.saturating_add(args[3].len());
         if bytes.len() < end {
             bytes.resize(end, 0);
         }
         bytes[offset..end].copy_from_slice(&args[3]);
-        Outcome::reply(RespValue::Integer(bytes.len() as i64))
+        let len = bytes.len() as i64;
+        self.raw_string_keys.insert((db_index, args[1].clone()));
+        Outcome::reply(RespValue::Integer(len))
     }
 
     fn cmd_getrange(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
@@ -2497,7 +2945,7 @@ impl State {
             Ok(None) => Outcome::blocked(BlockRequest {
                 db: db_index,
                 keys: vec![args[1].clone()],
-                kind: BlockKind::Move,
+                kind: BlockKind::Move { rpoplpush: true },
                 source_side: ListSide::Right,
                 destination: Some(args[2].clone()),
                 destination_side: ListSide::Left,
@@ -2530,7 +2978,7 @@ impl State {
             Ok(None) => Outcome::blocked(BlockRequest {
                 db: db_index,
                 keys: vec![args[1].clone()],
-                kind: BlockKind::Move,
+                kind: BlockKind::Move { rpoplpush: false },
                 source_side: from,
                 destination: Some(args[2].clone()),
                 destination_side: to,
@@ -2573,6 +3021,12 @@ impl State {
                         let members = sorted_members(&zset, *max);
                         let (member, score) = &members[0];
                         self.remove_zset_members(request.db, key, std::slice::from_ref(member));
+                        let command = if *max {
+                            b"ZPOPMAX".to_vec()
+                        } else {
+                            b"ZPOPMIN".to_vec()
+                        };
+                        self.propagate(request.db, &[command, key.clone()]);
                         return Some(RespValue::Array(vec![
                             RespValue::bulk(key.clone()),
                             RespValue::bulk(member.clone()),
@@ -2665,7 +3119,7 @@ impl State {
                 }
                 None
             }
-            BlockKind::Move => {
+            BlockKind::Move { rpoplpush } => {
                 let destination = request.destination.as_ref()?;
                 match self.list_move(
                     request.db,
@@ -2674,7 +3128,34 @@ impl State {
                     request.source_side,
                     request.destination_side,
                 ) {
-                    Ok(Some(value)) => Some(RespValue::bulk(value)),
+                    Ok(Some(value)) => {
+                        if *rpoplpush {
+                            self.propagate(
+                                request.db,
+                                &[
+                                    b"RPOPLPUSH".to_vec(),
+                                    request.keys[0].clone(),
+                                    destination.clone(),
+                                ],
+                            );
+                        } else {
+                            let side = |side: ListSide| match side {
+                                ListSide::Left => b"LEFT".to_vec(),
+                                ListSide::Right => b"RIGHT".to_vec(),
+                            };
+                            self.propagate(
+                                request.db,
+                                &[
+                                    b"LMOVE".to_vec(),
+                                    request.keys[0].clone(),
+                                    destination.clone(),
+                                    side(request.source_side),
+                                    side(request.destination_side),
+                                ],
+                            );
+                        }
+                        Some(RespValue::bulk(value))
+                    }
                     Ok(None) => None,
                     Err(outcome) => Some(outcome.reply),
                 }
@@ -3092,6 +3573,100 @@ impl State {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn cmd_replicaof(&mut self, args: &[Vec<u8>]) -> Outcome {
+        if args.len() != 3 {
+            return wrong_args(args);
+        }
+        if args[1].eq_ignore_ascii_case(b"no") && args[2].eq_ignore_ascii_case(b"one") {
+            self.request_promotion();
+            return Outcome::ok();
+        }
+        let Ok(port) = parse_u64(&args[2]) else {
+            return Outcome::error("ERR Invalid master port");
+        };
+        if port == 0 || port > u64::from(u16::MAX) {
+            return Outcome::error("ERR Invalid master port");
+        }
+        let host = String::from_utf8_lossy(&args[1]).to_string();
+        self.request_replicaof(host, port as u16);
+        Outcome::ok()
+    }
+
+    fn cmd_replconf(&mut self, args: &[Vec<u8>]) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        let subcommand = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+        match subcommand.as_str() {
+            "GETACK" => Outcome::reply(RespValue::Array(vec![
+                RespValue::bulk(b"REPLCONF".to_vec()),
+                RespValue::bulk(b"ACK".to_vec()),
+                RespValue::bulk(self.replication.offset.to_string().into_bytes()),
+            ])),
+            _ => Outcome::ok(),
+        }
+    }
+
+    fn cmd_role(&self) -> Outcome {
+        match self.replication.role {
+            ReplicationRole::Master => {
+                let replicas = self
+                    .replication
+                    .clients
+                    .values()
+                    .map(|offset| {
+                        RespValue::Array(vec![
+                            RespValue::bulk(b"127.0.0.1".to_vec()),
+                            RespValue::Integer(0),
+                            RespValue::Integer((*offset).max(0)),
+                        ])
+                    })
+                    .collect();
+                Outcome::reply(RespValue::Array(vec![
+                    RespValue::bulk(b"master".to_vec()),
+                    RespValue::Integer(self.replication.offset),
+                    RespValue::Array(replicas),
+                ]))
+            }
+            ReplicationRole::Replica => {
+                let state = if self.replication.link_status == "up" {
+                    "connected"
+                } else if self.replication.sync_in_progress {
+                    "handshake"
+                } else {
+                    "connect"
+                };
+                Outcome::reply(RespValue::Array(vec![
+                    RespValue::bulk(b"slave".to_vec()),
+                    RespValue::bulk(self.replication.master_host.clone().into_bytes()),
+                    RespValue::Integer(i64::from(self.replication.master_port)),
+                    RespValue::bulk(state.as_bytes().to_vec()),
+                    RespValue::Integer(self.replication.offset),
+                ]))
+            }
+        }
+    }
+
+    fn cmd_wait(&mut self, args: &[Vec<u8>]) -> Outcome {
+        if args.len() != 3 {
+            return wrong_args(args);
+        }
+        let Ok(numreplicas) = parse_i64(&args[1]) else {
+            return Outcome::error("ERR value is not an integer or out of range");
+        };
+        if parse_i64(&args[2]).is_err() {
+            return Outcome::error("ERR timeout is not an integer or out of range");
+        }
+        let acked = self
+            .replication
+            .clients
+            .values()
+            .filter(|offset| **offset >= self.replication.offset)
+            .count() as i64;
+        let _ = numreplicas;
+        Outcome::reply(RespValue::Integer(acked))
     }
 
     fn hll_sparse_max_bytes(&self) -> usize {
@@ -7178,13 +7753,15 @@ impl State {
                 }
                 self.expire_if_needed(db_index, &args[2]);
                 match self.dbs[db_index].get(&args[2]) {
-                    Some(entry) => Outcome::reply(RespValue::bulk(
-                        entry
-                            .value
-                            .encoding(self.encoding_limits)
-                            .as_bytes()
-                            .to_vec(),
-                    )),
+                    Some(entry) => {
+                        let mut encoding = entry.value.encoding(self.encoding_limits);
+                        if entry.value.as_string().is_some()
+                            && self.raw_string_keys.contains(&(db_index, args[2].clone()))
+                        {
+                            encoding = "raw";
+                        }
+                        Outcome::reply(RespValue::bulk(encoding.as_bytes().to_vec()))
+                    }
                     None => Outcome::error("ERR no such key"),
                 }
             }
@@ -7564,6 +8141,7 @@ impl State {
             }
             "RESETSTAT" => {
                 self.stats = Stats::default();
+                self.command_calls.clear();
                 Outcome::ok()
             }
             "REWRITE" => {
@@ -7669,12 +8247,68 @@ impl State {
             );
         }
         if all || section == "REPLICATION" {
-            let _ = write!(
-                out,
-                "# Replication\r\nrole:master\r\nconnected_slaves:0\r\nmaster_failover_state:no-failover\r\nmaster_replid:{}\r\nmaster_replid2:{}\r\nmaster_repl_offset:0\r\nsecond_repl_offset:-1\r\nrepl_backlog_active:0\r\nrepl_backlog_size:1048576\r\nrepl_backlog_first_byte_offset:0\r\nrepl_backlog_histlen:0\r\n\r\n",
-                "0".repeat(40),
-                "0".repeat(40)
-            );
+            let _ = write!(out, "# Replication\r\n");
+            match self.replication.role {
+                ReplicationRole::Master => {
+                    let _ = write!(out, "role:master\r\n");
+                    let _ = write!(
+                        out,
+                        "connected_slaves:{}\r\n",
+                        self.replication.clients.len()
+                    );
+                    for (index, offset) in self.replication.clients.values().enumerate() {
+                        let _ = writeln!(
+                            out,
+                            "slave{}:ip=127.0.0.1,port=0,state=online,offset={},lag=0",
+                            index,
+                            (*offset).max(0)
+                        );
+                    }
+                    let _ = write!(out, "master_failover_state:no-failover\r\n");
+                    let _ = write!(out, "master_replid:{}\r\n", self.replication.replid);
+                    let _ = write!(out, "master_replid2:{}\r\n", "0".repeat(40));
+                    let _ = write!(out, "master_repl_offset:{}\r\n", self.replication.offset);
+                    let _ = write!(out, "second_repl_offset:-1\r\n");
+                    let _ = write!(out, "repl_backlog_active:1\r\n");
+                    let _ = write!(out, "repl_backlog_size:1048576\r\n");
+                    let _ = write!(out, "repl_backlog_first_byte_offset:0\r\n");
+                    let _ = write!(out, "repl_backlog_histlen:{}\r\n", self.replication.offset);
+                }
+                ReplicationRole::Replica => {
+                    let idle = ((now_unix_ms() - self.replication.last_io_ms).max(0)) / 1000;
+                    let _ = write!(out, "role:slave\r\n");
+                    let _ = write!(out, "master_host:{}\r\n", self.replication.master_host);
+                    let _ = write!(out, "master_port:{}\r\n", self.replication.master_port);
+                    let _ = write!(
+                        out,
+                        "master_link_status:{}\r\n",
+                        self.replication.link_status
+                    );
+                    let _ = write!(out, "master_last_io_seconds_ago:{idle}\r\n");
+                    let _ = writeln!(
+                        out,
+                        "master_sync_in_progress:{}",
+                        i64::from(self.replication.sync_in_progress)
+                    );
+                    let _ = write!(out, "slave_repl_offset:{}\r\n", self.replication.offset);
+                    let _ = write!(out, "slave_read_only:1\r\n");
+                    let _ = write!(out, "connected_slaves:0\r\n");
+                    let _ = write!(out, "master_replid:{}\r\n", self.replication.master_replid);
+                    let _ = write!(out, "master_repl_offset:{}\r\n", self.replication.offset);
+                }
+            }
+            let _ = write!(out, "\r\n");
+        }
+        if section == "COMMANDSTATS" {
+            let _ = writeln!(out, "# Commandstats");
+            for (name, calls) in &self.command_calls {
+                let _ = write!(
+                    out,
+                    "cmdstat_{}:calls={},usec=0,usec_per_call=0.00\r\n",
+                    name.to_ascii_lowercase(),
+                    calls
+                );
+            }
         }
         if all || section == "CPU" {
             let _ = write!(
@@ -7832,6 +8466,7 @@ impl State {
 
     pub fn unregister_client(&mut self, id: u64) {
         self.client_names.remove(&id);
+        self.replication.clients.remove(&id);
     }
 
     pub fn aof_path(&self) -> std::path::PathBuf {
@@ -7961,13 +8596,8 @@ impl State {
         if self.loading {
             return;
         }
-        let Some(writer) = self.aof.as_mut() else {
-            return;
-        };
         for args in commands {
-            if let Err(err) = writer.append(db, args) {
-                self.aof_last_write_status = format!("err: {err}");
-            }
+            self.propagate(db, args);
         }
     }
 
@@ -7977,13 +8607,9 @@ impl State {
         };
         let name = String::from_utf8_lossy(name).to_ascii_uppercase();
         if let Some(commands) = &outcome.aof_commands {
-            let Some(writer) = self.aof.as_mut() else {
-                return;
-            };
-            for args in commands {
-                if let Err(err) = writer.append(db, args) {
-                    self.aof_last_write_status = format!("err: {err}");
-                }
+            let commands = commands.clone();
+            for args in &commands {
+                self.propagate(db, args);
             }
             return;
         }
@@ -8007,9 +8633,15 @@ impl State {
                 key.clone(),
             ];
         } else if name == "BRPOPLPUSH" {
-            args[0] = b"RPOPLPUSH".to_vec();
+            args = vec![b"RPOPLPUSH".to_vec(), args[1].clone(), args[2].clone()];
         } else if name == "BLMOVE" {
-            args[0] = b"LMOVE".to_vec();
+            args = vec![
+                b"LMOVE".to_vec(),
+                args[1].clone(),
+                args[2].clone(),
+                args[3].clone(),
+                args[4].clone(),
+            ];
         } else if name == "BZPOPMIN" || name == "BZPOPMAX" {
             let Some(RespValue::Array(values)) = Some(&outcome.reply) else {
                 return;
@@ -8025,6 +8657,15 @@ impl State {
                 },
                 key.clone(),
             ];
+        } else if name == "GETDEL" {
+            match &outcome.reply {
+                RespValue::BulkString(_) => {
+                    args = vec![b"DEL".to_vec(), args[1].clone()];
+                }
+                _ => return,
+            }
+        } else if name == "GETSET" {
+            args = vec![b"SET".to_vec(), args[1].clone(), args[2].clone()];
         } else if name == "SPOP" {
             let mut members = Vec::new();
             match &outcome.reply {
@@ -8044,12 +8685,30 @@ impl State {
             args = vec![b"SREM".to_vec(), args[1].clone()];
             args.extend(members);
         }
-        let Some(writer) = self.aof.as_mut() else {
-            return;
-        };
-        if let Err(err) = writer.append(db, &args) {
+        self.propagate(db, &args);
+    }
+
+    fn propagate(&mut self, db: usize, args: &[Vec<u8>]) {
+        if !self.loading
+            && let Some(writer) = self.aof.as_mut()
+            && let Err(err) = writer.append(db, args)
+        {
             self.aof_last_write_status = format!("err: {err}");
         }
+        if self.replication.role != ReplicationRole::Master || self.replication.clients.is_empty() {
+            return;
+        }
+        let mut bytes = Vec::new();
+        if self.replication.selected_db != Some(db) {
+            let select = [b"SELECT".to_vec(), db.to_string().into_bytes()];
+            let refs: Vec<&[u8]> = select.iter().map(Vec::as_slice).collect();
+            bytes.extend_from_slice(&encode_command(&refs));
+            self.replication.selected_db = Some(db);
+        }
+        let refs: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
+        bytes.extend_from_slice(&encode_command(&refs));
+        self.replication.offset += bytes.len() as i64;
+        self.replication.pending.extend_from_slice(&bytes);
     }
 
     fn rdb_path(&self) -> std::path::PathBuf {
@@ -8176,7 +8835,12 @@ impl State {
                 let Some(entry) = self.dbs[client.db].get(&args[2]) else {
                     return Outcome::error("ERR no such key");
                 };
-                let encoding = entry.value.encoding(self.encoding_limits);
+                let mut encoding = entry.value.encoding(self.encoding_limits);
+                if entry.value.as_string().is_some()
+                    && self.raw_string_keys.contains(&(client.db, args[2].clone()))
+                {
+                    encoding = "raw";
+                }
                 let address = fnv1a(&args[2]);
                 let text = format!(
                     "Value at:0x{address:x} refcount:1 encoding:{encoding} serializedlength:{} lru:0 lru_seconds_idle:0",
@@ -9222,6 +9886,8 @@ fn is_modifiable_config(key: &str) -> bool {
             | "tcp-keepalive"
             | "timeout"
             | "hz"
+            | "loglevel"
+            | "lua-time-limit"
             | "appendonly"
             | "appendfsync"
             | "proto-max-bulk-len"
@@ -9230,7 +9896,10 @@ fn is_modifiable_config(key: &str) -> bool {
             | "repl-ping-replica-period"
             | "repl-timeout"
             | "repl-diskless-sync"
+            | "repl-diskless-sync-delay"
+            | "repl-diskless-load"
             | "repl-disable-tcp-nodelay"
+            | "repl-backlog-size"
             | "replica-read-only"
             | "replica-serve-stale-data"
             | "auto-aof-rewrite-percentage"
@@ -9250,6 +9919,22 @@ fn is_modifiable_config(key: &str) -> bool {
             | "hll-sparse-max-bytes"
             | "stream-node-max-entries"
     )
+}
+
+fn new_replid() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut state = nanos ^ (u64::from(std::process::id()) << 32);
+    let mut out = String::with_capacity(40);
+    for _ in 0..20 {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        out.push_str(&format!("{:02x}", (state >> 56) as u8));
+    }
+    out
 }
 
 fn now_unix_ms() -> i64 {

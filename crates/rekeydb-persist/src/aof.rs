@@ -200,6 +200,31 @@ pub fn load_with_options(path: &Path) -> Result<AofLoad, String> {
     })
 }
 
+/// Serialize a dataset as a RESP command stream, used as the full-sync
+/// payload for replicas.
+pub fn encode_entries(entries: &[RdbEntry]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let max_db = entries.iter().map(|entry| entry.db).max().unwrap_or(0);
+    for db in 0..=max_db {
+        let rows: Vec<&RdbEntry> = entries.iter().filter(|entry| entry.db == db).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let select = [b"SELECT".to_vec(), db.to_string().into_bytes()];
+        let refs: Vec<&[u8]> = select.iter().map(Vec::as_slice).collect();
+        out.extend_from_slice(&encode_command(&refs));
+        let mut emit = |_db: usize, args: &[Vec<u8>]| -> std::io::Result<()> {
+            let refs: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
+            out.extend_from_slice(&encode_command(&refs));
+            Ok(())
+        };
+        for entry in rows {
+            write_entry(&mut emit, db, entry).expect("in-memory emit");
+        }
+    }
+    out
+}
+
 /// Rewrite the current dataset as a command-only AOF.
 pub fn rewrite(path: &Path, entries: &[RdbEntry], fsync: AofFsync) -> std::io::Result<()> {
     let temp = path.with_extension("aof.tmp");
@@ -212,7 +237,7 @@ pub fn rewrite(path: &Path, entries: &[RdbEntry], fsync: AofFsync) -> std::io::R
         }
         writer.append(db, &[b"SELECT".to_vec(), db.to_string().into_bytes()])?;
         for entry in rows {
-            write_entry(&mut writer, db, entry)?;
+            write_entry(&mut |db, args| writer.append(db, args), db, entry)?;
         }
     }
     writer.sync_all()?;
@@ -221,10 +246,13 @@ pub fn rewrite(path: &Path, entries: &[RdbEntry], fsync: AofFsync) -> std::io::R
     Ok(())
 }
 
-fn write_entry(writer: &mut AofWriter, db: usize, entry: &RdbEntry) -> std::io::Result<()> {
+fn write_entry<F>(emit: &mut F, db: usize, entry: &RdbEntry) -> std::io::Result<()>
+where
+    F: FnMut(usize, &[Vec<u8>]) -> std::io::Result<()>,
+{
     match &entry.value {
         Value::String(bytes) => {
-            writer.append(db, &[b"SET".to_vec(), entry.key.clone(), bytes.clone()])?;
+            emit(db, &[b"SET".to_vec(), entry.key.clone(), bytes.clone()])?;
         }
         Value::List(list) => {
             let mut items: Vec<&Vec<u8>> = list.iter().collect();
@@ -233,7 +261,7 @@ fn write_entry(writer: &mut AofWriter, db: usize, entry: &RdbEntry) -> std::io::
                 let chunk: Vec<&Vec<u8>> = items.drain(..take).collect();
                 let mut args = vec![b"RPUSH".to_vec(), entry.key.clone()];
                 args.extend(chunk.into_iter().cloned());
-                writer.append(db, &args)?;
+                emit(db, &args)?;
             }
         }
         Value::Set(set) => {
@@ -244,7 +272,7 @@ fn write_entry(writer: &mut AofWriter, db: usize, entry: &RdbEntry) -> std::io::
                 let chunk: Vec<&Vec<u8>> = items.drain(..take).collect();
                 let mut args = vec![b"SADD".to_vec(), entry.key.clone()];
                 args.extend(chunk.into_iter().cloned());
-                writer.append(db, &args)?;
+                emit(db, &args)?;
             }
         }
         Value::Hash(map) => {
@@ -257,11 +285,11 @@ fn write_entry(writer: &mut AofWriter, db: usize, entry: &RdbEntry) -> std::io::
                     args.push(field.clone());
                     args.push(value.clone());
                 }
-                writer.append(db, &args)?;
+                emit(db, &args)?;
             }
         }
         Value::Stream(stream) => {
-            write_stream(writer, db, &entry.key, stream)?;
+            write_stream(emit, db, &entry.key, stream)?;
         }
         Value::ZSet(zset) => {
             let mut items: Vec<(&Vec<u8>, f64)> = zset
@@ -283,12 +311,12 @@ fn write_entry(writer: &mut AofWriter, db: usize, entry: &RdbEntry) -> std::io::
                     args.push(format_double_17g(score).into_bytes());
                     args.push(member.clone());
                 }
-                writer.append(db, &args)?;
+                emit(db, &args)?;
             }
         }
     }
     if let Some(expire) = entry.expire_ms {
-        writer.append(
+        emit(
             db,
             &[
                 b"PEXPIREAT".to_vec(),
@@ -300,15 +328,13 @@ fn write_entry(writer: &mut AofWriter, db: usize, entry: &RdbEntry) -> std::io::
     Ok(())
 }
 
-fn write_stream(
-    writer: &mut AofWriter,
-    db: usize,
-    key: &[u8],
-    stream: &Stream,
-) -> std::io::Result<()> {
+fn write_stream<F>(emit: &mut F, db: usize, key: &[u8], stream: &Stream) -> std::io::Result<()>
+where
+    F: FnMut(usize, &[Vec<u8>]) -> std::io::Result<()>,
+{
     if stream.is_empty() {
         // Redis creates empty streams with a trimmed-away XADD.
-        writer.append(
+        emit(
             db,
             &[
                 b"XADD".to_vec(),
@@ -331,10 +357,10 @@ fn write_stream(
                 args.push(field.clone());
                 args.push(value.clone());
             }
-            writer.append(db, &args)?;
+            emit(db, &args)?;
         }
     }
-    writer.append(
+    emit(
         db,
         &[
             b"XSETID".to_vec(),
@@ -343,7 +369,7 @@ fn write_stream(
         ],
     )?;
     for (name, group) in &stream.groups {
-        writer.append(
+        emit(
             db,
             &[
                 b"XGROUP".to_vec(),
@@ -353,21 +379,24 @@ fn write_stream(
                 group.last_delivered_id.to_string().into_bytes(),
             ],
         )?;
-        write_group(writer, db, key, name, group)?;
+        write_group(emit, db, key, name, group)?;
     }
     Ok(())
 }
 
-fn write_group(
-    writer: &mut AofWriter,
+fn write_group<F>(
+    emit: &mut F,
     db: usize,
     key: &[u8],
     name: &[u8],
     group: &StreamGroup,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    F: FnMut(usize, &[Vec<u8>]) -> std::io::Result<()>,
+{
     for (consumer_name, consumer) in &group.consumers {
         if consumer.pel.is_empty() {
-            writer.append(
+            emit(
                 db,
                 &[
                     b"XGROUP".to_vec(),
@@ -383,7 +412,7 @@ fn write_group(
             let Some(nack) = group.pel.get(id) else {
                 continue;
             };
-            writer.append(
+            emit(
                 db,
                 &[
                     b"XCLAIM".to_vec(),
