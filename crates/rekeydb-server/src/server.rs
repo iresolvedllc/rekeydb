@@ -409,7 +409,9 @@ impl Server {
                 continue;
             };
             let reply = match blocked.request.kind {
-                BlockKind::Pop | BlockKind::ZPop { .. } => RespValue::NullArray,
+                BlockKind::Pop | BlockKind::ZPop { .. } | BlockKind::StreamRead(_) => {
+                    RespValue::NullArray
+                }
                 BlockKind::Move => RespValue::null(),
             };
             reply.encode(client.ctx.version, &mut client.out);
@@ -457,7 +459,9 @@ impl Server {
             RespValue::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
         } else {
             match blocked.request.kind {
-                BlockKind::Pop | BlockKind::ZPop { .. } => RespValue::NullArray,
+                BlockKind::Pop | BlockKind::ZPop { .. } | BlockKind::StreamRead(_) => {
+                    RespValue::NullArray
+                }
                 BlockKind::Move => RespValue::null(),
             }
         };

@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 182 / 236
+Implemented: 197 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -17,7 +17,7 @@ Implemented: 182 / 236
 | @scripting | 0 | 3 |
 | @set | 16 | 16 |
 | @sortedset | 32 | 32 |
-| @stream | 0 | 15 |
+| @stream | 15 | 15 |
 | @string | 21 | 22 |
 | @transaction | 5 | 5 |
 | uncategorized | 7 | 28 |
@@ -51,21 +51,6 @@ Implemented: 182 / 236
 - `evalsha`
 - `slowlog`
 - `script`
-- `xadd`
-- `xrange`
-- `xrevrange`
-- `xlen`
-- `xread`
-- `xreadgroup`
-- `xgroup`
-- `xsetid`
-- `xack`
-- `xpending`
-- `xclaim`
-- `xautoclaim`
-- `xinfo`
-- `xdel`
-- `xtrim`
 - `post`
 - `host:`
 - `latency`

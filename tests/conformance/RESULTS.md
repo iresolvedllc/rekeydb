@@ -18,6 +18,20 @@ ziplist/skiplist encodings, range/lex/score queries, set-operation stores,
 blocking `BZPOPMIN`/`BZPOPMAX`, `ZRANDMEMBER`, `ZSCAN`, RDB reload, and RESP3
 reply shapes.
 
+The stream suite (`unit/type/stream.tcl`) passes all **56** tests, including
+ID generation edge cases, exact/approximate `MAXLEN`/`MINID` trimming with
+node-aware `LIMIT`, blocking `XREAD`, `XINFO`, `XSETID`, and AOF round-trips
+for empty streams and deleted last entries.
+
+The consumer-group portion of `unit/type/stream-cgroups.tcl` passes its first
+**32** tests, including `XGROUP`, `XREADGROUP` history and new-message reads,
+`XPENDING`, `XACK`, `XCLAIM`, `XAUTOCLAIM`, `XINFO FULL`, blocking group
+reads, and AOF rewrite of groups/consumers. The remaining tests require
+replication (`SLAVEOF`).
+
+The keyspace suite (`unit/keyspace.tcl`) passes all **51** tests, including
+stream `COPY` and `DEBUG DIGEST-VALUE`.
+
 The reference binary passes all 22 protocol tests.
 
 ## Running
@@ -80,12 +94,12 @@ Additional suites:
 - `unit/bitops.tcl`: **53/53 pass**;
 - `unit/bitfield.tcl`: 13 core tests pass, then replication setup is required;
 - `unit/type/incr.tcl`: **24/24 pass**;
-- `unit/type/string.tcl`: 19 pass before replication-stream helpers;
-- `unit/keyspace.tcl`: 39 pass before streams are required.
+- `unit/type/string.tcl`: 19 pass before replication-stream helpers.
 
 ## Next
 
-- Streams, scripting, and replication.
+- Replication, scripting, and cluster.
+- Stream RDB and `DUMP` payloads (listpack encoding).
 - `KEYDB.NHGET`/`NHSET` nested hashes.
 - AOF RDB preamble support and automatic rewrite thresholds.
 - Compact RDB output (quicklist/ziplist/intset/hash-ziplist/zset-ziplist) for

@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rekeydb_core::{
-    Database, EncodingLimits, Entry, ExpireEntry, HashValue, MvccClock, Snapshot, Value,
+    Database, EncodingLimits, Entry, ExpireEntry, HashValue, MvccClock, Snapshot, Stream,
+    StreamConsumer, StreamEntry, StreamGroup, StreamId, StreamNack, Value,
 };
 use rekeydb_persist::aof::{self, AofFsync, AofWriter};
 use rekeydb_persist::{RdbEntry, dataset_digest, dump, load, restore, save, value_digest};
@@ -47,11 +48,24 @@ pub enum ListSide {
     Right,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockKind {
     Pop,
     Move,
     ZPop { max: bool },
+    StreamRead(StreamBlock),
+}
+
+/// State captured when an XREAD/XREADGROUP command blocks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamBlock {
+    /// `None` represents the special XREADGROUP `>` ID.
+    pub ids: Vec<Option<StreamId>>,
+    pub group: Option<Vec<u8>>,
+    pub consumer: Option<Vec<u8>>,
+    pub count: usize,
+    pub noack: bool,
+    pub version: RespVersion,
 }
 
 /// A client waiting for data on one or more list keys.
@@ -74,6 +88,8 @@ pub struct Outcome {
     pub block: Option<Box<BlockRequest>>,
     pub wake: Vec<(usize, Vec<u8>)>,
     pub unblock: Option<(u64, bool)>,
+    /// When set, these commands replace the default AOF entry for this command.
+    pub aof_commands: Option<Vec<Vec<Vec<u8>>>>,
 }
 
 impl Outcome {
@@ -85,6 +101,7 @@ impl Outcome {
             block: None,
             wake: Vec::new(),
             unblock: None,
+            aof_commands: None,
         }
     }
 
@@ -104,6 +121,7 @@ impl Outcome {
             block: Some(Box::new(request)),
             wake: Vec::new(),
             unblock: None,
+            aof_commands: None,
         }
     }
 }
@@ -197,9 +215,11 @@ impl State {
             "zset-max-ziplist-entries",
             "zset-max-ziplist-value",
             "hll-sparse-max-bytes",
+            "stream-node-max-entries",
         ] {
             config_values.insert(key.to_string(), String::new());
         }
+        config_values.extend(config.settings.clone());
         let mut state = Self {
             config,
             dbs: (0..databases).map(|_| Database::new()).collect(),
@@ -268,6 +288,9 @@ impl State {
         self.config_values
             .entry("hll-sparse-max-bytes".into())
             .or_insert_with(|| "3000".into());
+        self.config_values
+            .entry("stream-node-max-entries".into())
+            .or_insert_with(|| "100".into());
         self.config_values.insert(
             "aof-use-rdb-preamble".into(),
             if self.config.aof_use_rdb_preamble {
@@ -441,7 +464,9 @@ impl State {
                 let outcome = self.execute(&command, client);
                 if let Some(block) = outcome.block {
                     replies.push(match block.kind {
-                        BlockKind::Pop | BlockKind::ZPop { .. } => RespValue::NullArray,
+                        BlockKind::Pop | BlockKind::ZPop { .. } | BlockKind::StreamRead(_) => {
+                            RespValue::NullArray
+                        }
                         BlockKind::Move => RespValue::null(),
                     });
                 } else {
@@ -458,6 +483,7 @@ impl State {
                 block: None,
                 wake,
                 unblock: None,
+                aof_commands: None,
             };
         }
         if let Some(queue) = client.multi.as_mut() {
@@ -489,6 +515,7 @@ impl State {
                 block: None,
                 wake: Vec::new(),
                 unblock: None,
+                aof_commands: None,
             },
             "SELECT" => {
                 if args.len() != 2 {
@@ -695,6 +722,20 @@ impl State {
                     self.cmd_pfselftest()
                 }
             }
+            "XADD" => self.cmd_xadd(args, client.db),
+            "XLEN" => self.cmd_xlen(args, client.db),
+            "XRANGE" => self.cmd_xrange(&name, args, client.db),
+            "XREVRANGE" => self.cmd_xrange(&name, args, client.db),
+            "XDEL" => self.cmd_xdel(args, client.db),
+            "XTRIM" => self.cmd_xtrim(args, client.db),
+            "XSETID" => self.cmd_xsetid(args, client.db),
+            "XREAD" | "XREADGROUP" => self.cmd_xread(&name, args, client.db, client.version),
+            "XGROUP" => self.cmd_xgroup(args, client.db),
+            "XACK" => self.cmd_xack(args, client.db),
+            "XPENDING" => self.cmd_xpending(args, client.db),
+            "XCLAIM" => self.cmd_xclaim(args, client.db),
+            "XAUTOCLAIM" => self.cmd_xautoclaim(args, client.db),
+            "XINFO" => self.cmd_xinfo(args, client.db),
             "GEOADD" => self.cmd_geoadd(args, client.db, client.version),
             "GEOPOS" => self.cmd_geopos(args, client.db),
             "GEOHASH" => self.cmd_geohash(args, client.db),
@@ -845,6 +886,7 @@ impl State {
                 block: None,
                 wake: Vec::new(),
                 unblock: None,
+                aof_commands: None,
             },
             _ => {
                 let mut message = format!(
@@ -2501,7 +2543,7 @@ impl State {
     /// Serve a blocked client after data is available. Returns `None` if the
     /// source is still empty, in which case the client stays blocked.
     pub fn serve_blocked(&mut self, request: &BlockRequest) -> Option<RespValue> {
-        match request.kind {
+        match &request.kind {
             BlockKind::Pop => {
                 for key in &request.keys {
                     match self.dbs[request.db].get(key) {
@@ -2528,7 +2570,7 @@ impl State {
                         if zset.scores.is_empty() {
                             continue;
                         }
-                        let members = sorted_members(&zset, max);
+                        let members = sorted_members(&zset, *max);
                         let (member, score) = &members[0];
                         self.remove_zset_members(request.db, key, std::slice::from_ref(member));
                         return Some(RespValue::Array(vec![
@@ -2537,6 +2579,89 @@ impl State {
                             score_value(*score, RespVersion::V2),
                         ]));
                     }
+                }
+                None
+            }
+            BlockKind::StreamRead(block) => {
+                for (index, key) in request.keys.iter().enumerate() {
+                    self.expire_if_needed(request.db, key);
+                    let mut missing_group = false;
+                    let mut missing_key = false;
+                    let (group_last, have_data) = match self.dbs[request.db].get(key) {
+                        Some(entry) => match entry.value.as_stream() {
+                            Some(stream) => {
+                                if let Some(group_name) = &block.group {
+                                    match stream.groups.get(group_name) {
+                                        Some(group) => (
+                                            Some(group.last_delivered_id),
+                                            stream.last_valid_id().is_some_and(|maxid| {
+                                                maxid > group.last_delivered_id
+                                            }),
+                                        ),
+                                        None => {
+                                            missing_group = true;
+                                            (None, false)
+                                        }
+                                    }
+                                } else {
+                                    let gt = block
+                                        .ids
+                                        .get(index)
+                                        .and_then(|id| *id)
+                                        .unwrap_or(StreamId::MIN);
+                                    (None, stream.last_valid_id().is_some_and(|maxid| maxid > gt))
+                                }
+                            }
+                            None => (None, false),
+                        },
+                        None => {
+                            missing_key = true;
+                            (None, false)
+                        }
+                    };
+                    if missing_group || (missing_key && block.group.is_some()) {
+                        return Some(
+                            Outcome::error(
+                                "NOGROUP the consumer group this client was blocked on no longer exists",
+                            )
+                            .reply,
+                        );
+                    }
+                    if !have_data {
+                        continue;
+                    }
+                    let start = match group_last {
+                        Some(last) => last.next().unwrap_or(StreamId::MAX),
+                        None => block
+                            .ids
+                            .get(index)
+                            .and_then(|id| *id)
+                            .unwrap_or(StreamId::MIN)
+                            .next()
+                            .unwrap_or(StreamId::MAX),
+                    };
+                    let now = self.now_ms();
+                    let group_info = match (&block.group, &block.consumer) {
+                        (Some(group), Some(consumer)) => {
+                            Some((group.as_slice(), consumer.as_slice(), block.noack))
+                        }
+                        _ => None,
+                    };
+                    let (entries, commands) = match self.stream_serve_read(
+                        request.db,
+                        key,
+                        start,
+                        block.count,
+                        group_info,
+                        false,
+                        now,
+                    ) {
+                        Ok(result) => result,
+                        Err(outcome) => return Some(outcome.reply),
+                    };
+                    self.append_aof_commands(request.db, &commands);
+                    let served = vec![(key.clone(), entries)];
+                    return Some(stream_read_reply(&served, block.version));
                 }
                 None
             }
@@ -3192,6 +3317,1781 @@ impl State {
             return Outcome::error("ERR TESTFAILED Dense and sparse representations disagree");
         }
         Outcome::ok()
+    }
+
+    fn stream_node_max_entries(&self) -> usize {
+        self.config_values
+            .get("stream-node-max-entries")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(100)
+            .max(1)
+    }
+
+    fn stream_ref(&mut self, db_index: usize, key: &[u8]) -> Result<Option<&Stream>, Outcome> {
+        self.expire_if_needed(db_index, key);
+        match self.dbs[db_index].get(key) {
+            Some(entry) => match entry.value.as_stream() {
+                Some(stream) => Ok(Some(stream)),
+                None => Err(wrong_type()),
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn stream_for_write(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+        mvcc: u64,
+    ) -> Result<Option<&mut Stream>, Outcome> {
+        self.expire_if_needed(db_index, key);
+        if !self.dbs[db_index].contains_key(key) {
+            return Ok(None);
+        }
+        let Some(entry) = self.dbs[db_index].get_mut(key) else {
+            return Ok(None);
+        };
+        entry.mvcc = mvcc;
+        match Arc::make_mut(&mut entry.value) {
+            Value::Stream(stream) => Ok(Some(stream)),
+            _ => Err(wrong_type()),
+        }
+    }
+
+    fn cmd_xadd(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 5 {
+            return wrong_args(args);
+        }
+        let key = &args[1];
+        let parsed = match self.parse_stream_trim_args(args, true) {
+            Ok(parsed) => parsed,
+            Err(outcome) => return outcome,
+        };
+        let idpos = parsed.id_position;
+        let field_pos = idpos + 1;
+        if args.len() < field_pos + 2 || !(args.len() - field_pos).is_multiple_of(2) {
+            return Outcome::error("ERR wrong number of arguments for XADD");
+        }
+        if parsed.id_given && parsed.id.is_some_and(|id| id == StreamId::MIN) {
+            return Outcome::error("ERR The ID specified in XADD must be greater than 0-0");
+        }
+        self.expire_if_needed(db_index, key);
+        let exists = self.dbs[db_index].contains_key(key);
+        if exists {
+            match self.dbs[db_index].get(key) {
+                Some(entry) if entry.value.as_stream().is_none() => return wrong_type(),
+                _ => {}
+            }
+        }
+        if !exists && parsed.nomkstream {
+            let mut outcome = Outcome::reply(RespValue::null());
+            outcome.aof_commands = Some(Vec::new());
+            return outcome;
+        }
+        let now = self.now_ms();
+        let node_max = self.stream_node_max_entries();
+        let existing_last = self.dbs[db_index]
+            .get(key)
+            .and_then(|entry| entry.value.as_stream())
+            .map(|stream| stream.last_id)
+            .unwrap_or(StreamId::MIN);
+        let id = match parsed.id {
+            Some(id) if parsed.id_given => {
+                if id <= existing_last {
+                    return Outcome::error(
+                        "ERR The ID specified in XADD is equal or smaller than the target stream top item",
+                    );
+                }
+                id
+            }
+            _ => {
+                if existing_last == StreamId::MAX {
+                    return Outcome::error(
+                        "ERR The stream has exhausted the last possible ID, unable to add more items",
+                    );
+                }
+                let fresh = StreamId {
+                    ms: now.max(0) as u64,
+                    seq: 0,
+                };
+                if fresh.ms > existing_last.ms {
+                    fresh
+                } else {
+                    match existing_last.next() {
+                        Some(id) => id,
+                        None => {
+                            return Outcome::error(
+                                "ERR The stream has exhausted the last possible ID, unable to add more items",
+                            );
+                        }
+                    }
+                }
+            }
+        };
+        let mut fields = Vec::with_capacity((args.len() - field_pos) / 2);
+        for pair in args[field_pos..].chunks(2) {
+            fields.push((pair[0].clone(), pair[1].clone()));
+        }
+        let mvcc = self.clock.next(now);
+        if !exists {
+            self.dbs[db_index].insert(key, Value::Stream(Stream::default()), mvcc);
+        }
+        let trim_strategy = parsed.strategy.clone();
+        let approx = parsed.approx;
+        let limit = parsed.limit;
+        let mut aof_args = args.to_vec();
+        aof_args[idpos] = id.to_string().into_bytes();
+        {
+            let Some(stream) = (match self.stream_for_write(db_index, key, mvcc) {
+                Ok(stream) => stream,
+                Err(outcome) => return outcome,
+            }) else {
+                return wrong_type();
+            };
+            stream.append(id, fields, node_max);
+            match &trim_strategy {
+                StreamTrimStrategy::MaxLen(maxlen) => {
+                    stream.trim_maxlen(*maxlen, approx, limit);
+                }
+                StreamTrimStrategy::MinId(minid) => {
+                    stream.trim_minid(*minid, approx, limit);
+                }
+                StreamTrimStrategy::None => {}
+            }
+            if approx && !matches!(trim_strategy, StreamTrimStrategy::None) {
+                // Approximate trimming must be propagated as an exact trim
+                // reflecting the result computed here.
+                let value_index = parsed.value_index;
+                aof_args[value_index - 1] = b"=".to_vec();
+                let value = match &trim_strategy {
+                    StreamTrimStrategy::MaxLen(_) => stream.len().to_string(),
+                    StreamTrimStrategy::MinId(minid) => {
+                        stream.first_id().unwrap_or(*minid).to_string()
+                    }
+                    StreamTrimStrategy::None => unreachable!(),
+                };
+                aof_args[value_index] = value.into_bytes();
+                let mut index = value_index + 1;
+                while index + 1 < idpos {
+                    if aof_args[index].eq_ignore_ascii_case(b"limit") {
+                        aof_args.drain(index..index + 2);
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+        }
+        let mut outcome = Outcome::reply(RespValue::bulk(id.to_string().into_bytes()));
+        outcome.wake.push((db_index, key.clone()));
+        outcome.aof_commands = Some(vec![aof_args]);
+        outcome
+    }
+
+    fn cmd_xlen(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 2 {
+            return wrong_args(args);
+        }
+        match self.stream_ref(db_index, &args[1]) {
+            Ok(Some(stream)) => Outcome::reply(RespValue::Integer(stream.len() as i64)),
+            Ok(None) => Outcome::reply(RespValue::Integer(0)),
+            Err(outcome) => outcome,
+        }
+    }
+
+    fn cmd_xrange(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 4 {
+            return wrong_args(args);
+        }
+        let reverse = command == "XREVRANGE";
+        let start_arg = if reverse { &args[3] } else { &args[2] };
+        let end_arg = if reverse { &args[2] } else { &args[3] };
+        let (mut start, start_exclusive) = match parse_stream_range(start_arg, 0) {
+            Ok(value) => value,
+            Err(outcome) => return outcome,
+        };
+        if start_exclusive {
+            match start.next() {
+                Some(id) => start = id,
+                None => return Outcome::error("ERR invalid start ID for the interval"),
+            }
+        }
+        let (mut end, end_exclusive) = match parse_stream_range(end_arg, u64::MAX) {
+            Ok(value) => value,
+            Err(outcome) => return outcome,
+        };
+        if end_exclusive {
+            match end.previous() {
+                Some(id) => end = id,
+                None => return Outcome::error("ERR invalid end ID for the interval"),
+            }
+        }
+        let mut count: Option<usize> = None;
+        let mut index = 4;
+        while index < args.len() {
+            if index + 1 >= args.len() || !args[index].eq_ignore_ascii_case(b"count") {
+                return Outcome::error("ERR syntax error");
+            }
+            let Ok(value) = parse_i64(&args[index + 1]) else {
+                return Outcome::error("ERR value is not an integer or out of range");
+            };
+            count = Some(value.max(0) as usize);
+            index += 2;
+        }
+        let stream = match self.stream_ref(db_index, &args[1]) {
+            Ok(Some(stream)) => stream,
+            Ok(None) => return Outcome::reply(RespValue::Array(Vec::new())),
+            Err(outcome) => return outcome,
+        };
+        if count == Some(0) {
+            return Outcome::reply(RespValue::NullArray);
+        }
+        let mut entries: Vec<&StreamEntry> = stream
+            .iter()
+            .filter(|entry| entry.id >= start && entry.id <= end)
+            .collect();
+        if let Some(count) = count {
+            entries.truncate(count);
+        }
+        if reverse {
+            entries.reverse();
+        }
+        let values = entries
+            .into_iter()
+            .map(stream_entry_reply)
+            .collect::<Vec<_>>();
+        Outcome::reply(RespValue::Array(values))
+    }
+
+    fn cmd_xdel(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let mut ids = Vec::with_capacity(args.len() - 2);
+        for value in &args[2..] {
+            match parse_stream_id(value, 0, true) {
+                Some(id) => ids.push(id),
+                None => return invalid_stream_id(),
+            }
+        }
+        let mvcc = self.clock.next(self.now_ms());
+        let stream = match self.stream_for_write(db_index, &args[1], mvcc) {
+            Ok(Some(stream)) => stream,
+            Ok(None) => return Outcome::reply(RespValue::Integer(0)),
+            Err(outcome) => return outcome,
+        };
+        let mut deleted = 0i64;
+        for id in ids {
+            if stream.delete(id) {
+                deleted += 1;
+            }
+        }
+        Outcome::reply(RespValue::Integer(deleted))
+    }
+
+    fn cmd_xtrim(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 4 {
+            return wrong_args(args);
+        }
+        let parsed = match self.parse_stream_trim_args(args, false) {
+            Ok(parsed) => parsed,
+            Err(outcome) => return outcome,
+        };
+        let mvcc = self.clock.next(self.now_ms());
+        let stream = match self.stream_for_write(db_index, &args[1], mvcc) {
+            Ok(Some(stream)) => stream,
+            Ok(None) => return Outcome::reply(RespValue::Integer(0)),
+            Err(outcome) => return outcome,
+        };
+        let deleted = match &parsed.strategy {
+            StreamTrimStrategy::MaxLen(maxlen) => {
+                stream.trim_maxlen(*maxlen, parsed.approx, parsed.limit)
+            }
+            StreamTrimStrategy::MinId(minid) => {
+                stream.trim_minid(*minid, parsed.approx, parsed.limit)
+            }
+            StreamTrimStrategy::None => 0,
+        };
+        let mut outcome = Outcome::reply(RespValue::Integer(deleted as i64));
+        if parsed.approx && deleted > 0 {
+            let value = match &parsed.strategy {
+                StreamTrimStrategy::MaxLen(_) => stream.len().to_string(),
+                StreamTrimStrategy::MinId(minid) => stream.first_id().unwrap_or(*minid).to_string(),
+                StreamTrimStrategy::None => unreachable!(),
+            };
+            let name = match &parsed.strategy {
+                StreamTrimStrategy::MaxLen(_) => b"MAXLEN".to_vec(),
+                StreamTrimStrategy::MinId(_) => b"MINID".to_vec(),
+                StreamTrimStrategy::None => unreachable!(),
+            };
+            outcome.aof_commands = Some(vec![vec![
+                b"XTRIM".to_vec(),
+                args[1].clone(),
+                name,
+                b"=".to_vec(),
+                value.into_bytes(),
+            ]]);
+        }
+        outcome
+    }
+
+    fn cmd_xsetid(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() != 3 {
+            return wrong_args(args);
+        }
+        let Some(id) = parse_stream_id(&args[2], 0, true) else {
+            return invalid_stream_id();
+        };
+        let mvcc = self.clock.next(self.now_ms());
+        let Some(stream) = (match self.stream_for_write(db_index, &args[1], mvcc) {
+            Ok(stream) => stream,
+            Err(outcome) => return outcome,
+        }) else {
+            return Outcome::error("ERR no such key");
+        };
+        if let Some(maxid) = stream.last_valid_id()
+            && id < maxid
+        {
+            return Outcome::error(
+                "ERR The ID specified in XSETID is smaller than the target stream top item",
+            );
+        }
+        stream.last_id = id;
+        Outcome::ok()
+    }
+
+    fn cmd_xread(
+        &mut self,
+        command: &str,
+        args: &[Vec<u8>],
+        db_index: usize,
+        version: RespVersion,
+    ) -> Outcome {
+        if args.len() < 4 {
+            return wrong_args(args);
+        }
+        let xreadgroup = command == "XREADGROUP";
+        let mut timeout: Option<i64> = None;
+        let mut count: usize = 0;
+        let mut noack = false;
+        let mut groupname: Option<Vec<u8>> = None;
+        let mut consumername: Option<Vec<u8>> = None;
+        let mut streams_arg: Option<usize> = None;
+        let mut streams_count = 0usize;
+        let mut index = 1;
+        while index < args.len() {
+            let remaining = args.len() - 1 - index;
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "BLOCK" if remaining > 0 => {
+                    let Ok(value) = parse_i64(&args[index + 1]) else {
+                        return Outcome::error("ERR timeout is not an integer or out of range");
+                    };
+                    if value < 0 {
+                        return Outcome::error("ERR timeout is negative");
+                    }
+                    timeout = Some(value);
+                    index += 2;
+                }
+                "COUNT" if remaining > 0 => {
+                    let Ok(value) = parse_i64(&args[index + 1]) else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    count = value.max(0) as usize;
+                    index += 2;
+                }
+                "STREAMS" if remaining > 0 => {
+                    let start = index + 1;
+                    let total = args.len() - start;
+                    if !total.is_multiple_of(2) {
+                        return Outcome::error(
+                            "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
+                        );
+                    }
+                    streams_arg = Some(start);
+                    streams_count = total / 2;
+                    break;
+                }
+                "GROUP" if remaining >= 2 => {
+                    if !xreadgroup {
+                        return Outcome::error(
+                            "ERR The GROUP option is only supported by XREADGROUP. You called XREAD instead.",
+                        );
+                    }
+                    groupname = Some(args[index + 1].clone());
+                    consumername = Some(args[index + 2].clone());
+                    index += 3;
+                }
+                "NOACK" => {
+                    if !xreadgroup {
+                        return Outcome::error(
+                            "ERR The NOACK option is only supported by XREADGROUP. You called XREAD instead.",
+                        );
+                    }
+                    noack = true;
+                    index += 1;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        let Some(streams_arg) = streams_arg else {
+            return Outcome::error("ERR syntax error");
+        };
+        if xreadgroup && groupname.is_none() {
+            return Outcome::error("ERR Missing GROUP option for XREADGROUP");
+        }
+
+        let keys: Vec<Vec<u8>> = args[streams_arg..streams_arg + streams_count].to_vec();
+        let id_args = &args[streams_arg + streams_count..];
+        let mut ids: Vec<Option<StreamId>> = Vec::with_capacity(streams_count);
+        for (position, id_arg) in id_args.iter().enumerate() {
+            let key = &keys[position];
+            let stream = match self.stream_ref(db_index, key) {
+                Ok(stream) => stream,
+                Err(outcome) => return outcome,
+            };
+            if let Some(groupname) = &groupname
+                && !stream.is_some_and(|stream| stream.groups.contains_key(groupname))
+            {
+                return Outcome::error(no_group_message(key, groupname, true));
+            }
+            if id_arg == b"$" {
+                if xreadgroup {
+                    return Outcome::error(
+                        "ERR The $ ID is meaningless in the context of XREADGROUP: you want to read the history of this consumer by specifying a proper ID, or use the > ID to get new messages. The $ ID would just return an empty result set.",
+                    );
+                }
+                ids.push(Some(stream.map_or(StreamId::MIN, |stream| stream.last_id)));
+            } else if id_arg == b">" {
+                if !xreadgroup {
+                    return Outcome::error(
+                        "ERR The > ID can be specified only when calling XREADGROUP using the GROUP <group> <consumer> option.",
+                    );
+                }
+                ids.push(None);
+            } else {
+                match parse_stream_id(id_arg, 0, true) {
+                    Some(id) => ids.push(Some(id)),
+                    None => return invalid_stream_id(),
+                }
+            }
+        }
+
+        let now = self.now_ms();
+        let mut served: Vec<(Vec<u8>, Vec<RespValue>)> = Vec::new();
+        let mut aof_commands: Vec<Vec<Vec<u8>>> = Vec::new();
+        for position in 0..streams_count {
+            let key = &keys[position];
+            let stream = match self.stream_ref(db_index, key) {
+                Ok(Some(stream)) => stream,
+                Ok(None) => continue,
+                Err(outcome) => return outcome,
+            };
+            let (serve, history, start) = if let Some(groupname) = &groupname {
+                let Some(group) = stream.groups.get(groupname) else {
+                    return Outcome::error(no_group_message(key, groupname, true));
+                };
+                match ids[position] {
+                    Some(gt) => (true, true, gt.next().unwrap_or(StreamId::MAX)),
+                    None => {
+                        let serve = stream
+                            .last_valid_id()
+                            .is_some_and(|maxid| maxid > group.last_delivered_id);
+                        (
+                            serve,
+                            false,
+                            group.last_delivered_id.next().unwrap_or(StreamId::MAX),
+                        )
+                    }
+                }
+            } else {
+                let gt = ids[position].unwrap_or(StreamId::MIN);
+                let serve = stream.last_valid_id().is_some_and(|maxid| maxid > gt);
+                (serve, false, gt.next().unwrap_or(StreamId::MAX))
+            };
+            if !serve {
+                continue;
+            }
+            let group_info = match (&groupname, &consumername) {
+                (Some(group), Some(consumer)) => {
+                    Some((group.as_slice(), consumer.as_slice(), noack))
+                }
+                _ => None,
+            };
+            let (entries, commands) = match self
+                .stream_serve_read(db_index, key, start, count, group_info, history, now)
+            {
+                Ok(result) => result,
+                Err(outcome) => return outcome,
+            };
+            aof_commands.extend(commands);
+            served.push((key.clone(), entries));
+        }
+
+        if served.is_empty() {
+            let Some(timeout) = timeout else {
+                let mut outcome = Outcome::reply(RespValue::NullArray);
+                if xreadgroup {
+                    outcome.aof_commands = Some(Vec::new());
+                }
+                return outcome;
+            };
+            return Outcome::blocked(BlockRequest {
+                db: db_index,
+                keys,
+                kind: BlockKind::StreamRead(StreamBlock {
+                    ids,
+                    group: groupname,
+                    consumer: consumername,
+                    count: if count == 0 { 1000 } else { count },
+                    noack,
+                    version,
+                }),
+                source_side: ListSide::Left,
+                destination: None,
+                destination_side: ListSide::Left,
+                timeout_ms: if timeout == 0 {
+                    None
+                } else {
+                    Some(timeout as u64)
+                },
+            });
+        }
+
+        let reply = stream_read_reply(&served, version);
+        let mut outcome = Outcome::reply(reply);
+        outcome.aof_commands = Some(aof_commands);
+        outcome
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stream_serve_read(
+        &mut self,
+        db_index: usize,
+        key: &[u8],
+        start: StreamId,
+        count: usize,
+        group_info: Option<(&[u8], &[u8], bool)>,
+        history: bool,
+        now: i64,
+    ) -> Result<StreamReadResult, Outcome> {
+        let Some(entry) = self.dbs[db_index].get_mut(key) else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        let Some(stream) = Arc::make_mut(&mut entry.value).as_stream_mut() else {
+            return Err(wrong_type());
+        };
+        let mut commands = Vec::new();
+        let Some((group_name, consumer_name, noack)) = group_info else {
+            let limit = if count == 0 { usize::MAX } else { count };
+            let replies = stream
+                .iter()
+                .filter(|entry| entry.id >= start)
+                .take(limit)
+                .map(stream_entry_reply)
+                .collect();
+            return Ok((replies, commands));
+        };
+        if !stream.groups.contains_key(group_name) {
+            return Err(Outcome::error(no_group_message(key, group_name, false)));
+        }
+        let mut created_consumer = false;
+        {
+            let group = stream.groups.get_mut(group_name).expect("checked group");
+            match group.consumers.entry(consumer_name.to_vec()) {
+                std::collections::btree_map::Entry::Vacant(vacant) => {
+                    vacant.insert(StreamConsumer {
+                        name: consumer_name.to_vec(),
+                        seen_time: now,
+                        pel: std::collections::BTreeSet::new(),
+                    });
+                    created_consumer = true;
+                }
+                std::collections::btree_map::Entry::Occupied(mut occupied) => {
+                    occupied.get_mut().seen_time = now;
+                }
+            }
+        }
+        if history {
+            let ids: Vec<StreamId> = {
+                let group = stream.groups.get(group_name).expect("checked group");
+                group
+                    .consumers
+                    .get(consumer_name)
+                    .map(|consumer| {
+                        let limit = if count == 0 { usize::MAX } else { count };
+                        consumer.pel.range(start..).take(limit).copied().collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let mut replies = Vec::with_capacity(ids.len());
+            for id in ids {
+                let fields = stream.find(id).map(|entry| entry.fields.clone());
+                match fields {
+                    Some(fields) => {
+                        let group = stream.groups.get_mut(group_name).expect("checked group");
+                        if let Some(nack) = group.pel.get_mut(&id) {
+                            nack.delivery_time = now;
+                            nack.delivery_count += 1;
+                        }
+                        replies.push(stream_entry_reply_fields(id, &fields));
+                    }
+                    None => replies.push(RespValue::Array(vec![
+                        RespValue::bulk(id.to_string().into_bytes()),
+                        RespValue::NullArray,
+                    ])),
+                }
+            }
+            if created_consumer && noack {
+                commands.push(vec![
+                    b"XGROUP".to_vec(),
+                    b"CREATECONSUMER".to_vec(),
+                    key.to_vec(),
+                    group_name.to_vec(),
+                    consumer_name.to_vec(),
+                ]);
+            }
+            return Ok((replies, commands));
+        }
+
+        let limit = if count == 0 { usize::MAX } else { count };
+        let entries: Vec<(StreamId, StreamFields)> = stream
+            .iter()
+            .filter(|entry| entry.id >= start)
+            .take(limit)
+            .map(|entry| (entry.id, entry.fields.clone()))
+            .collect();
+        let mut replies = Vec::with_capacity(entries.len());
+        if let Some(last_id) = entries.last().map(|(id, _)| *id) {
+            {
+                let group = stream.groups.get_mut(group_name).expect("checked group");
+                group.last_delivered_id = last_id;
+                if !noack {
+                    for (id, _) in &entries {
+                        let previous_owner = group
+                            .pel
+                            .get(id)
+                            .map(|nack| nack.consumer.clone())
+                            .filter(|owner| !owner.is_empty());
+                        if let Some(previous) = previous_owner
+                            && previous != *consumer_name
+                            && let Some(consumer) = group.consumers.get_mut(&previous)
+                        {
+                            consumer.pel.remove(id);
+                        }
+                        match group.pel.get_mut(id) {
+                            Some(nack) => {
+                                nack.consumer = consumer_name.to_vec();
+                                nack.delivery_time = now;
+                                nack.delivery_count = 1;
+                            }
+                            None => {
+                                group.pel.insert(
+                                    *id,
+                                    StreamNack {
+                                        consumer: consumer_name.to_vec(),
+                                        delivery_time: now,
+                                        delivery_count: 1,
+                                    },
+                                );
+                            }
+                        }
+                        if let Some(consumer) = group.consumers.get_mut(consumer_name) {
+                            consumer.pel.insert(*id);
+                        }
+                    }
+                }
+            }
+            for (id, fields) in &entries {
+                replies.push(stream_entry_reply_fields(*id, fields));
+            }
+            let group = stream.groups.get(group_name).expect("checked group");
+            if noack {
+                if created_consumer {
+                    commands.push(vec![
+                        b"XGROUP".to_vec(),
+                        b"CREATECONSUMER".to_vec(),
+                        key.to_vec(),
+                        group_name.to_vec(),
+                        consumer_name.to_vec(),
+                    ]);
+                }
+                commands.push(vec![
+                    b"XGROUP".to_vec(),
+                    b"SETID".to_vec(),
+                    key.to_vec(),
+                    group_name.to_vec(),
+                    group.last_delivered_id.to_string().into_bytes(),
+                ]);
+            } else {
+                let last_delivered = group.last_delivered_id;
+                for (id, _) in &entries {
+                    let Some(nack) = group.pel.get(id) else {
+                        continue;
+                    };
+                    commands.push(stream_xclaim_command(
+                        key,
+                        group_name,
+                        consumer_name,
+                        *id,
+                        nack.delivery_time,
+                        nack.delivery_count,
+                        last_delivered,
+                    ));
+                }
+            }
+        } else if created_consumer && noack {
+            commands.push(vec![
+                b"XGROUP".to_vec(),
+                b"CREATECONSUMER".to_vec(),
+                key.to_vec(),
+                group_name.to_vec(),
+                consumer_name.to_vec(),
+            ]);
+        }
+        Ok((replies, commands))
+    }
+    fn cmd_xgroup(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        let subcommand = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+        let now = self.now_ms();
+        let mvcc = self.clock.next(now);
+        match subcommand.as_str() {
+            "CREATE" => {
+                if args.len() != 5 && args.len() != 6 {
+                    return xgroup_syntax_error(&args[1]);
+                }
+                let mut mkstream = false;
+                if args.len() == 6 {
+                    if !args[5].eq_ignore_ascii_case(b"mkstream") {
+                        return xgroup_syntax_error(&args[1]);
+                    }
+                    mkstream = true;
+                }
+                let key = &args[2];
+                let group_name = &args[3];
+                let existing = self.stream_ref(db_index, key);
+                let mut stream_existed = true;
+                match existing {
+                    Ok(Some(_)) => {}
+                    Ok(None) => stream_existed = false,
+                    Err(outcome) => return outcome,
+                }
+                let last_id = if args[4] == b"$" {
+                    if stream_existed {
+                        match self.stream_ref(db_index, key) {
+                            Ok(Some(stream)) => stream.last_id,
+                            _ => StreamId::MIN,
+                        }
+                    } else {
+                        StreamId::MIN
+                    }
+                } else {
+                    match parse_stream_id(&args[4], 0, true) {
+                        Some(id) => id,
+                        None => return invalid_stream_id(),
+                    }
+                };
+                if !stream_existed {
+                    if !mkstream {
+                        return Outcome::error(
+                            "ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.",
+                        );
+                    }
+                    self.dbs[db_index].insert(key, Value::Stream(Stream::default()), mvcc);
+                }
+                let Some(stream) = (match self.stream_for_write(db_index, key, mvcc) {
+                    Ok(stream) => stream,
+                    Err(outcome) => return outcome,
+                }) else {
+                    return Outcome::error("ERR no such key");
+                };
+                if stream.groups.contains_key(group_name) {
+                    return Outcome::error("BUSYGROUP Consumer Group name already exists");
+                }
+                stream.groups.insert(
+                    group_name.clone(),
+                    StreamGroup {
+                        last_delivered_id: last_id,
+                        ..StreamGroup::default()
+                    },
+                );
+                Outcome::ok()
+            }
+            "SETID" => {
+                if args.len() != 5 {
+                    return xgroup_syntax_error(&args[1]);
+                }
+                let Some(stream) = (match self.stream_for_write(db_index, &args[2], mvcc) {
+                    Ok(stream) => stream,
+                    Err(outcome) => return outcome,
+                }) else {
+                    return Outcome::error(
+                        "ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.",
+                    );
+                };
+                let id = if args[4] == b"$" {
+                    stream.last_id
+                } else {
+                    match parse_stream_id(&args[4], 0, false) {
+                        Some(id) => id,
+                        None => return invalid_stream_id(),
+                    }
+                };
+                let Some(group) = stream.groups.get_mut(&args[3]) else {
+                    return Outcome::error(no_group_message(&args[2], &args[3], false));
+                };
+                group.last_delivered_id = id;
+                Outcome::ok()
+            }
+            "DESTROY" => {
+                if args.len() != 4 {
+                    return xgroup_syntax_error(&args[1]);
+                }
+                let Some(stream) = (match self.stream_for_write(db_index, &args[2], mvcc) {
+                    Ok(stream) => stream,
+                    Err(outcome) => return outcome,
+                }) else {
+                    return Outcome::error(
+                        "ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.",
+                    );
+                };
+                let removed = stream.groups.remove(&args[3]).is_some();
+                let mut outcome = Outcome::reply(RespValue::Integer(i64::from(removed)));
+                outcome.wake.push((db_index, args[2].clone()));
+                outcome
+            }
+            "CREATECONSUMER" => {
+                if args.len() != 5 {
+                    return xgroup_syntax_error(&args[1]);
+                }
+                let Some(stream) = (match self.stream_for_write(db_index, &args[2], mvcc) {
+                    Ok(stream) => stream,
+                    Err(outcome) => return outcome,
+                }) else {
+                    return Outcome::error(
+                        "ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.",
+                    );
+                };
+                let key_name = args[2].clone();
+                let group_name = args[3].clone();
+                let Some(group) = stream.groups.get_mut(&group_name) else {
+                    return Outcome::error(no_group_message(&key_name, &group_name, false));
+                };
+                if group.consumers.contains_key(&args[4]) {
+                    Outcome::reply(RespValue::Integer(0))
+                } else {
+                    group.consumers.insert(
+                        args[4].clone(),
+                        StreamConsumer {
+                            name: args[4].clone(),
+                            seen_time: now,
+                            pel: std::collections::BTreeSet::new(),
+                        },
+                    );
+                    Outcome::reply(RespValue::Integer(1))
+                }
+            }
+            "DELCONSUMER" => {
+                if args.len() != 5 {
+                    return xgroup_syntax_error(&args[1]);
+                }
+                let Some(stream) = (match self.stream_for_write(db_index, &args[2], mvcc) {
+                    Ok(stream) => stream,
+                    Err(outcome) => return outcome,
+                }) else {
+                    return Outcome::error(
+                        "ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.",
+                    );
+                };
+                let key_name = args[2].clone();
+                let group_name = args[3].clone();
+                let Some(group) = stream.groups.get_mut(&group_name) else {
+                    return Outcome::error(no_group_message(&key_name, &group_name, false));
+                };
+                let Some(consumer) = group.consumers.remove(&args[4]) else {
+                    return Outcome::reply(RespValue::Integer(0));
+                };
+                let pending = consumer.pel.len() as i64;
+                for id in consumer.pel {
+                    group.pel.remove(&id);
+                }
+                Outcome::reply(RespValue::Integer(pending))
+            }
+            "HELP" if args.len() == 2 => Outcome::reply(RespValue::Array(vec![
+                RespValue::bulk(b"CREATE <key> <groupname> <id|$> [MKSTREAM]".to_vec()),
+                RespValue::bulk(b"CREATECONSUMER <key> <groupname> <consumer>".to_vec()),
+                RespValue::bulk(b"DELCONSUMER <key> <groupname> <consumer>".to_vec()),
+                RespValue::bulk(b"DESTROY <key> <groupname>".to_vec()),
+                RespValue::bulk(b"SETID <key> <groupname> <id|$>".to_vec()),
+            ])),
+            _ => xgroup_syntax_error(&args[1]),
+        }
+    }
+
+    fn cmd_xack(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 4 {
+            return wrong_args(args);
+        }
+        let mut ids = Vec::with_capacity(args.len() - 3);
+        for value in &args[3..] {
+            match parse_stream_id(value, 0, true) {
+                Some(id) => ids.push(id),
+                None => return invalid_stream_id(),
+            }
+        }
+        let mvcc = self.clock.next(self.now_ms());
+        let Some(stream) = (match self.stream_for_write(db_index, &args[1], mvcc) {
+            Ok(stream) => stream,
+            Err(outcome) => return outcome,
+        }) else {
+            return Outcome::reply(RespValue::Integer(0));
+        };
+        let Some(group) = stream.groups.get_mut(&args[2]) else {
+            return Outcome::reply(RespValue::Integer(0));
+        };
+        let mut acknowledged = 0i64;
+        for id in ids {
+            let Some(nack) = group.pel.remove(&id) else {
+                continue;
+            };
+            if let Some(consumer) = group.consumers.get_mut(&nack.consumer) {
+                consumer.pel.remove(&id);
+            }
+            acknowledged += 1;
+        }
+        Outcome::reply(RespValue::Integer(acknowledged))
+    }
+
+    fn cmd_xpending(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        let just_info = args.len() == 3;
+        if !just_info && !(6..=9).contains(&args.len()) {
+            return Outcome::error("ERR syntax error");
+        }
+        let mut min_idle = 0i64;
+        let mut start = StreamId::MIN;
+        let mut end = StreamId::MAX;
+        let mut count = 0usize;
+        let mut consumer_filter: Option<&Vec<u8>> = None;
+        if !just_info {
+            let mut start_index = 3;
+            if args[3].eq_ignore_ascii_case(b"idle") {
+                if args.len() < 8 {
+                    return Outcome::error("ERR syntax error");
+                }
+                let Ok(value) = parse_i64(&args[4]) else {
+                    return Outcome::error("ERR value is not an integer or out of range");
+                };
+                min_idle = value.max(0);
+                start_index += 2;
+            }
+            let Ok(value) = parse_i64(&args[start_index + 2]) else {
+                return Outcome::error("ERR value is not an integer or out of range");
+            };
+            count = value.max(0) as usize;
+            let (mut range_start, start_exclusive) = match parse_stream_range(&args[start_index], 0)
+            {
+                Ok(value) => value,
+                Err(outcome) => return outcome,
+            };
+            if start_exclusive {
+                match range_start.next() {
+                    Some(id) => range_start = id,
+                    None => return Outcome::error("ERR invalid start ID for the interval"),
+                }
+            }
+            let (mut range_end, end_exclusive) =
+                match parse_stream_range(&args[start_index + 1], u64::MAX) {
+                    Ok(value) => value,
+                    Err(outcome) => return outcome,
+                };
+            if end_exclusive {
+                match range_end.previous() {
+                    Some(id) => range_end = id,
+                    None => return Outcome::error("ERR invalid end ID for the interval"),
+                }
+            }
+            start = range_start;
+            end = range_end;
+            if start_index + 3 < args.len() {
+                consumer_filter = Some(&args[start_index + 3]);
+            }
+        }
+        let now = self.now_ms();
+        let stream = match self.stream_ref(db_index, &args[1]) {
+            Ok(Some(stream)) => stream,
+            Ok(None) => return Outcome::error(no_group_message(&args[1], &args[2], false)),
+            Err(outcome) => return outcome,
+        };
+        let Some(group) = stream.groups.get(&args[2]) else {
+            return Outcome::error(no_group_message(&args[1], &args[2], false));
+        };
+        if just_info {
+            if group.pel.is_empty() {
+                return Outcome::reply(RespValue::Array(vec![
+                    RespValue::Integer(0),
+                    RespValue::null(),
+                    RespValue::null(),
+                    RespValue::NullArray,
+                ]));
+            }
+            let first = *group.pel.keys().next().expect("non-empty");
+            let last = *group.pel.keys().next_back().expect("non-empty");
+            let consumers = group
+                .consumers
+                .iter()
+                .filter(|(_, consumer)| !consumer.pel.is_empty())
+                .map(|(name, consumer)| {
+                    RespValue::Array(vec![
+                        RespValue::bulk(name.clone()),
+                        RespValue::bulk(consumer.pel.len().to_string().into_bytes()),
+                    ])
+                })
+                .collect();
+            return Outcome::reply(RespValue::Array(vec![
+                RespValue::Integer(group.pel.len() as i64),
+                RespValue::bulk(first.to_string().into_bytes()),
+                RespValue::bulk(last.to_string().into_bytes()),
+                RespValue::Array(consumers),
+            ]));
+        }
+        let ids: Vec<StreamId> = match consumer_filter {
+            Some(name) => match group.consumers.get(name) {
+                Some(consumer) => consumer.pel.range(start..=end).copied().collect(),
+                None => return Outcome::reply(RespValue::Array(Vec::new())),
+            },
+            None => group.pel.range(start..=end).map(|(id, _)| *id).collect(),
+        };
+        let mut values = Vec::new();
+        for id in ids {
+            if values.len() >= count {
+                break;
+            }
+            let Some(nack) = group.pel.get(&id) else {
+                continue;
+            };
+            let elapsed = (now - nack.delivery_time).max(0);
+            if elapsed < min_idle {
+                continue;
+            }
+            values.push(RespValue::Array(vec![
+                RespValue::bulk(id.to_string().into_bytes()),
+                RespValue::bulk(nack.consumer.clone()),
+                RespValue::Integer(elapsed),
+                RespValue::Integer(nack.delivery_count as i64),
+            ]));
+        }
+        Outcome::reply(RespValue::Array(values))
+    }
+
+    fn cmd_xclaim(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 6 {
+            return wrong_args(args);
+        }
+        let now = self.now_ms();
+        let mvcc = self.clock.next(now);
+        let mut justid = false;
+        let mut force = false;
+        let mut retrycount: Option<u64> = None;
+        let mut deliverytime: Option<i64> = None;
+        let mut last_id = StreamId::MIN;
+        let mut ids = Vec::new();
+        let mut index = 5;
+        while index < args.len() {
+            let Some(id) = parse_stream_id(&args[index], 0, true) else {
+                break;
+            };
+            ids.push(id);
+            index += 1;
+        }
+        while index < args.len() {
+            let remaining = args.len() - 1 - index;
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "FORCE" => {
+                    force = true;
+                    index += 1;
+                }
+                "JUSTID" => {
+                    justid = true;
+                    index += 1;
+                }
+                "IDLE" if remaining > 0 => {
+                    let Ok(value) = parse_i64(&args[index + 1]) else {
+                        return Outcome::error("ERR Invalid IDLE option argument for XCLAIM");
+                    };
+                    deliverytime = Some(now - value);
+                    index += 2;
+                }
+                "TIME" if remaining > 0 => {
+                    let Ok(value) = parse_i64(&args[index + 1]) else {
+                        return Outcome::error("ERR Invalid TIME option argument for XCLAIM");
+                    };
+                    deliverytime = Some(value);
+                    index += 2;
+                }
+                "RETRYCOUNT" if remaining > 0 => {
+                    let Ok(value) = parse_i64(&args[index + 1]) else {
+                        return Outcome::error("ERR Invalid RETRYCOUNT option argument for XCLAIM");
+                    };
+                    retrycount = Some(value.max(0) as u64);
+                    index += 2;
+                }
+                "LASTID" if remaining > 0 => {
+                    match parse_stream_id(&args[index + 1], 0, true) {
+                        Some(id) => last_id = id,
+                        None => return invalid_stream_id(),
+                    }
+                    index += 2;
+                }
+                _ => {
+                    return Outcome::error(format!(
+                        "ERR Unrecognized XCLAIM option '{}'",
+                        String::from_utf8_lossy(&args[index])
+                    ));
+                }
+            }
+        }
+        let min_idle = match parse_i64(&args[4]) {
+            Ok(value) => value.max(0),
+            Err(_) => {
+                return Outcome::error("ERR Invalid min-idle-time argument for XCLAIM");
+            }
+        };
+        let deliverytime = deliverytime
+            .map(|value| value.clamp(0, now.max(0)))
+            .unwrap_or(now);
+        let Some(stream) = (match self.stream_for_write(db_index, &args[1], mvcc) {
+            Ok(stream) => stream,
+            Err(outcome) => return outcome,
+        }) else {
+            return Outcome::error(no_group_message(&args[1], &args[2], false));
+        };
+        if !stream.groups.contains_key(&args[2]) {
+            return Outcome::error(no_group_message(&args[1], &args[2], false));
+        }
+        let key = args[1].clone();
+        let group_name = args[2].clone();
+        let consumer_name = args[3].clone();
+        let mut propagate_last_id = false;
+        {
+            let group = stream.groups.get_mut(&group_name).expect("checked group");
+            if last_id > group.last_delivered_id {
+                group.last_delivered_id = last_id;
+                propagate_last_id = true;
+            }
+        }
+        let mut replies = Vec::new();
+        let mut commands: Vec<Vec<Vec<u8>>> = Vec::new();
+        for id in ids {
+            let entry_fields = stream.find(id).map(|entry| entry.fields.clone());
+            let nack_state: Option<(i64, u64)>;
+            {
+                let group = stream.groups.get_mut(&group_name).expect("checked group");
+                let mut nack = group.pel.get(&id).cloned();
+                if nack.is_none() && force {
+                    if entry_fields.is_none() {
+                        continue;
+                    }
+                    nack = Some(StreamNack {
+                        consumer: Vec::new(),
+                        delivery_time: now,
+                        delivery_count: 1,
+                    });
+                }
+                let Some(mut nack) = nack else {
+                    continue;
+                };
+                if !nack.consumer.is_empty() && min_idle > 0 && now - nack.delivery_time < min_idle
+                {
+                    continue;
+                }
+                if !group.consumers.contains_key(&consumer_name) {
+                    group.consumers.insert(
+                        consumer_name.clone(),
+                        StreamConsumer {
+                            name: consumer_name.clone(),
+                            seen_time: now,
+                            pel: std::collections::BTreeSet::new(),
+                        },
+                    );
+                }
+                if !nack.consumer.is_empty()
+                    && nack.consumer != consumer_name
+                    && let Some(old) = group.consumers.get_mut(&nack.consumer)
+                {
+                    old.pel.remove(&id);
+                }
+                nack.delivery_time = deliverytime;
+                if let Some(retrycount) = retrycount {
+                    nack.delivery_count = retrycount;
+                } else if !justid {
+                    nack.delivery_count += 1;
+                }
+                nack.consumer = consumer_name.clone();
+                if let Some(consumer) = group.consumers.get_mut(&consumer_name) {
+                    consumer.pel.insert(id);
+                }
+                group.pel.insert(id, nack.clone());
+                nack_state = Some((nack.delivery_time, nack.delivery_count));
+                propagate_last_id = false;
+            }
+            if let Some((time, count)) = nack_state {
+                if justid {
+                    replies.push(RespValue::bulk(id.to_string().into_bytes()));
+                } else {
+                    match &entry_fields {
+                        Some(fields) => replies.push(stream_entry_reply_fields(id, fields)),
+                        None => replies.push(RespValue::null()),
+                    }
+                }
+                let last = stream
+                    .groups
+                    .get(&group_name)
+                    .map(|group| group.last_delivered_id)
+                    .unwrap_or(StreamId::MIN);
+                commands.push(stream_xclaim_command(
+                    &key,
+                    &group_name,
+                    &consumer_name,
+                    id,
+                    time,
+                    count,
+                    last,
+                ));
+            }
+        }
+        if propagate_last_id {
+            let last = stream
+                .groups
+                .get(&group_name)
+                .map(|group| group.last_delivered_id)
+                .unwrap_or(StreamId::MIN);
+            commands.push(vec![
+                b"XGROUP".to_vec(),
+                b"SETID".to_vec(),
+                key,
+                group_name,
+                last.to_string().into_bytes(),
+            ]);
+        }
+        let mut outcome = Outcome::reply(RespValue::Array(replies));
+        outcome.aof_commands = Some(commands);
+        outcome
+    }
+
+    fn cmd_xautoclaim(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 6 {
+            return wrong_args(args);
+        }
+        let now = self.now_ms();
+        let mvcc = self.clock.next(now);
+        let min_idle = match parse_i64(&args[4]) {
+            Ok(value) => value.max(0),
+            Err(_) => {
+                return Outcome::error("ERR Invalid min-idle-time argument for XAUTOCLAIM");
+            }
+        };
+        let (mut start, start_exclusive) = match parse_stream_range(&args[5], 0) {
+            Ok(value) => value,
+            Err(outcome) => return outcome,
+        };
+        if start_exclusive {
+            match start.next() {
+                Some(id) => start = id,
+                None => return Outcome::error("ERR invalid start ID for the interval"),
+            }
+        }
+        let mut count = 100usize;
+        let mut justid = false;
+        let mut index = 6;
+        while index < args.len() {
+            let remaining = args.len() - 1 - index;
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "COUNT" if remaining > 0 => {
+                    let Ok(value) = parse_i64(&args[index + 1]) else {
+                        return Outcome::error("ERR COUNT must be > 0");
+                    };
+                    if value <= 0 {
+                        return Outcome::error("ERR COUNT must be > 0");
+                    }
+                    count = value as usize;
+                    index += 2;
+                }
+                "JUSTID" => {
+                    justid = true;
+                    index += 1;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+        let Some(stream) = (match self.stream_for_write(db_index, &args[1], mvcc) {
+            Ok(stream) => stream,
+            Err(outcome) => return outcome,
+        }) else {
+            return Outcome::error(no_group_message(&args[1], &args[2], false));
+        };
+        if !stream.groups.contains_key(&args[2]) {
+            return Outcome::error(no_group_message(&args[1], &args[2], false));
+        }
+        let key = args[1].clone();
+        let group_name = args[2].clone();
+        let consumer_name = args[3].clone();
+        let ids: Vec<StreamId> = {
+            let group = stream.groups.get(&group_name).expect("checked group");
+            group.pel.range(start..).map(|(id, _)| *id).collect()
+        };
+        let mut replies = Vec::new();
+        let mut commands: Vec<Vec<Vec<u8>>> = Vec::new();
+        let mut attempts = count.saturating_mul(10);
+        let mut remaining = count;
+        let mut processed = 0usize;
+        while processed < ids.len() && attempts > 0 && remaining > 0 {
+            let id = ids[processed];
+            processed += 1;
+            attempts -= 1;
+            let entry_fields = stream.find(id).map(|entry| entry.fields.clone());
+            let nack_state: Option<(i64, u64)>;
+            {
+                let group = stream.groups.get_mut(&group_name).expect("checked group");
+                let Some(mut nack) = group.pel.get(&id).cloned() else {
+                    continue;
+                };
+                if min_idle > 0 && now - nack.delivery_time < min_idle {
+                    continue;
+                }
+                if !group.consumers.contains_key(&consumer_name) {
+                    group.consumers.insert(
+                        consumer_name.clone(),
+                        StreamConsumer {
+                            name: consumer_name.clone(),
+                            seen_time: now,
+                            pel: std::collections::BTreeSet::new(),
+                        },
+                    );
+                }
+                if nack.consumer != consumer_name
+                    && let Some(old) = group.consumers.get_mut(&nack.consumer)
+                {
+                    old.pel.remove(&id);
+                }
+                nack.delivery_time = now;
+                if !justid {
+                    nack.delivery_count += 1;
+                }
+                nack.consumer = consumer_name.clone();
+                if let Some(consumer) = group.consumers.get_mut(&consumer_name) {
+                    consumer.pel.insert(id);
+                }
+                group.pel.insert(id, nack.clone());
+                nack_state = Some((nack.delivery_time, nack.delivery_count));
+            }
+            if let Some((time, delivery_count)) = nack_state {
+                if justid {
+                    replies.push(RespValue::bulk(id.to_string().into_bytes()));
+                } else {
+                    match &entry_fields {
+                        Some(fields) => replies.push(stream_entry_reply_fields(id, fields)),
+                        None => replies.push(RespValue::null()),
+                    }
+                }
+                let last = stream
+                    .groups
+                    .get(&group_name)
+                    .map(|group| group.last_delivered_id)
+                    .unwrap_or(StreamId::MIN);
+                commands.push(stream_xclaim_command(
+                    &key,
+                    &group_name,
+                    &consumer_name,
+                    id,
+                    time,
+                    delivery_count,
+                    last,
+                ));
+                remaining -= 1;
+            }
+        }
+        let cursor = ids.get(processed).copied().unwrap_or(StreamId::MIN);
+        let mut outcome = Outcome::reply(RespValue::Array(vec![
+            RespValue::bulk(cursor.to_string().into_bytes()),
+            RespValue::Array(replies),
+        ]));
+        outcome.aof_commands = Some(commands);
+        outcome
+    }
+
+    fn cmd_xinfo(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        let subcommand = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+        if subcommand == "HELP" {
+            return Outcome::reply(RespValue::Array(vec![
+                RespValue::bulk(b"CONSUMERS <key> <groupname>".to_vec()),
+                RespValue::bulk(b"GROUPS <key>".to_vec()),
+                RespValue::bulk(b"STREAM <key> [FULL [COUNT <count>]]".to_vec()),
+            ]));
+        }
+        if args.len() < 3 {
+            return xinfo_syntax_error();
+        }
+        let key = &args[2];
+        match subcommand.as_str() {
+            "CONSUMERS" => {
+                if args.len() != 4 {
+                    return xinfo_syntax_error();
+                }
+                let now = self.now_ms();
+                let stream = match self.stream_ref(db_index, key) {
+                    Ok(Some(stream)) => stream,
+                    Ok(None) => return Outcome::error("ERR no such key"),
+                    Err(outcome) => return outcome,
+                };
+                let Some(group) = stream.groups.get(&args[3]) else {
+                    return Outcome::error(no_group_message(key, &args[3], false));
+                };
+                let values = group
+                    .consumers
+                    .iter()
+                    .map(|(name, consumer)| {
+                        RespValue::Map(vec![
+                            (
+                                RespValue::bulk(b"name".to_vec()),
+                                RespValue::bulk(name.clone()),
+                            ),
+                            (
+                                RespValue::bulk(b"pending".to_vec()),
+                                RespValue::Integer(consumer.pel.len() as i64),
+                            ),
+                            (
+                                RespValue::bulk(b"idle".to_vec()),
+                                RespValue::Integer((now - consumer.seen_time).max(0)),
+                            ),
+                        ])
+                    })
+                    .collect();
+                Outcome::reply(RespValue::Array(values))
+            }
+            "GROUPS" => {
+                if args.len() != 3 {
+                    return xinfo_syntax_error();
+                }
+                let stream = match self.stream_ref(db_index, key) {
+                    Ok(Some(stream)) => stream,
+                    Ok(None) => return Outcome::error("ERR no such key"),
+                    Err(outcome) => return outcome,
+                };
+                let values = stream
+                    .groups
+                    .iter()
+                    .map(|(name, group)| {
+                        RespValue::Map(vec![
+                            (
+                                RespValue::bulk(b"name".to_vec()),
+                                RespValue::bulk(name.clone()),
+                            ),
+                            (
+                                RespValue::bulk(b"consumers".to_vec()),
+                                RespValue::Integer(group.consumers.len() as i64),
+                            ),
+                            (
+                                RespValue::bulk(b"pending".to_vec()),
+                                RespValue::Integer(group.pel.len() as i64),
+                            ),
+                            (
+                                RespValue::bulk(b"last-delivered-id".to_vec()),
+                                RespValue::bulk(group.last_delivered_id.to_string().into_bytes()),
+                            ),
+                        ])
+                    })
+                    .collect();
+                Outcome::reply(RespValue::Array(values))
+            }
+            "STREAM" => {
+                let mut full = false;
+                let mut count = 10usize;
+                if args.len() > 3 {
+                    if !args[3].eq_ignore_ascii_case(b"full") {
+                        return xinfo_syntax_error();
+                    }
+                    match args.len() {
+                        4 => full = true,
+                        6 if args[4].eq_ignore_ascii_case(b"count") => {
+                            let Ok(value) = parse_i64(&args[5]) else {
+                                return Outcome::error(
+                                    "ERR value is not an integer or out of range",
+                                );
+                            };
+                            count = if value < 0 { 10 } else { value as usize };
+                            full = true;
+                        }
+                        _ => return xinfo_syntax_error(),
+                    }
+                }
+                let stream = match self.stream_ref(db_index, key) {
+                    Ok(Some(stream)) => stream,
+                    Ok(None) => return Outcome::error("ERR no such key"),
+                    Err(outcome) => return outcome,
+                };
+                let limit = if count == 0 { usize::MAX } else { count };
+                if !full {
+                    let first = stream.iter().next().map(stream_entry_reply);
+                    let last = stream.iter().last().map(stream_entry_reply);
+                    return Outcome::reply(RespValue::Map(vec![
+                        (
+                            RespValue::bulk(b"length".to_vec()),
+                            RespValue::Integer(stream.len() as i64),
+                        ),
+                        (
+                            RespValue::bulk(b"radix-tree-keys".to_vec()),
+                            RespValue::Integer(stream.nodes.len() as i64),
+                        ),
+                        (
+                            RespValue::bulk(b"radix-tree-nodes".to_vec()),
+                            RespValue::Integer(stream.nodes.len().max(1) as i64 + 1),
+                        ),
+                        (
+                            RespValue::bulk(b"last-generated-id".to_vec()),
+                            RespValue::bulk(stream.last_id.to_string().into_bytes()),
+                        ),
+                        (
+                            RespValue::bulk(b"groups".to_vec()),
+                            RespValue::Integer(stream.groups.len() as i64),
+                        ),
+                        (
+                            RespValue::bulk(b"first-entry".to_vec()),
+                            first.unwrap_or(RespValue::null()),
+                        ),
+                        (
+                            RespValue::bulk(b"last-entry".to_vec()),
+                            last.unwrap_or(RespValue::null()),
+                        ),
+                    ]));
+                }
+                let entries = stream.iter().take(limit).map(stream_entry_reply).collect();
+                let groups = stream
+                    .groups
+                    .iter()
+                    .map(|(name, group)| {
+                        let pending = group
+                            .pel
+                            .iter()
+                            .take(limit)
+                            .map(|(id, nack)| {
+                                RespValue::Array(vec![
+                                    RespValue::bulk(id.to_string().into_bytes()),
+                                    RespValue::bulk(nack.consumer.clone()),
+                                    RespValue::Integer(nack.delivery_time),
+                                    RespValue::Integer(nack.delivery_count as i64),
+                                ])
+                            })
+                            .collect();
+                        let consumers = group
+                            .consumers
+                            .iter()
+                            .map(|(consumer_name, consumer)| {
+                                let pending = consumer
+                                    .pel
+                                    .iter()
+                                    .take(limit)
+                                    .map(|id| {
+                                        let (time, count) = group
+                                            .pel
+                                            .get(id)
+                                            .map(|nack| (nack.delivery_time, nack.delivery_count))
+                                            .unwrap_or((0, 0));
+                                        RespValue::Array(vec![
+                                            RespValue::bulk(id.to_string().into_bytes()),
+                                            RespValue::Integer(time),
+                                            RespValue::Integer(count as i64),
+                                        ])
+                                    })
+                                    .collect();
+                                RespValue::Map(vec![
+                                    (
+                                        RespValue::bulk(b"name".to_vec()),
+                                        RespValue::bulk(consumer_name.clone()),
+                                    ),
+                                    (
+                                        RespValue::bulk(b"seen-time".to_vec()),
+                                        RespValue::Integer(consumer.seen_time),
+                                    ),
+                                    (
+                                        RespValue::bulk(b"pel-count".to_vec()),
+                                        RespValue::Integer(consumer.pel.len() as i64),
+                                    ),
+                                    (
+                                        RespValue::bulk(b"pending".to_vec()),
+                                        RespValue::Array(pending),
+                                    ),
+                                ])
+                            })
+                            .collect();
+                        RespValue::Map(vec![
+                            (
+                                RespValue::bulk(b"name".to_vec()),
+                                RespValue::bulk(name.clone()),
+                            ),
+                            (
+                                RespValue::bulk(b"last-delivered-id".to_vec()),
+                                RespValue::bulk(group.last_delivered_id.to_string().into_bytes()),
+                            ),
+                            (
+                                RespValue::bulk(b"pel-count".to_vec()),
+                                RespValue::Integer(group.pel.len() as i64),
+                            ),
+                            (
+                                RespValue::bulk(b"pending".to_vec()),
+                                RespValue::Array(pending),
+                            ),
+                            (
+                                RespValue::bulk(b"consumers".to_vec()),
+                                RespValue::Array(consumers),
+                            ),
+                        ])
+                    })
+                    .collect();
+                Outcome::reply(RespValue::Map(vec![
+                    (
+                        RespValue::bulk(b"length".to_vec()),
+                        RespValue::Integer(stream.len() as i64),
+                    ),
+                    (
+                        RespValue::bulk(b"radix-tree-keys".to_vec()),
+                        RespValue::Integer(stream.nodes.len() as i64),
+                    ),
+                    (
+                        RespValue::bulk(b"radix-tree-nodes".to_vec()),
+                        RespValue::Integer(stream.nodes.len().max(1) as i64 + 1),
+                    ),
+                    (
+                        RespValue::bulk(b"last-generated-id".to_vec()),
+                        RespValue::bulk(stream.last_id.to_string().into_bytes()),
+                    ),
+                    (
+                        RespValue::bulk(b"entries".to_vec()),
+                        RespValue::Array(entries),
+                    ),
+                    (
+                        RespValue::bulk(b"groups".to_vec()),
+                        RespValue::Array(groups),
+                    ),
+                ]))
+            }
+            _ => xinfo_syntax_error(),
+        }
+    }
+    fn parse_stream_trim_args(
+        &self,
+        args: &[Vec<u8>],
+        xadd: bool,
+    ) -> Result<ParsedStreamTrim, Outcome> {
+        let mut parsed = ParsedStreamTrim {
+            strategy: StreamTrimStrategy::None,
+            approx: false,
+            limit: 0,
+            limit_given: false,
+            value_index: 0,
+            id: None,
+            id_given: false,
+            nomkstream: false,
+            id_position: 2,
+        };
+        let mut index = 2usize;
+        while index < args.len() {
+            let remaining = args.len() - 1 - index;
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            if xadd && args[index] == b"*" {
+                parsed.id_position = index;
+                break;
+            }
+            match option.as_str() {
+                "MAXLEN" | "MINID" if remaining > 0 => {
+                    if !matches!(parsed.strategy, StreamTrimStrategy::None) {
+                        return Err(Outcome::error(
+                            "ERR syntax error, MAXLEN and MINID options at the same time are not compatible",
+                        ));
+                    }
+                    parsed.approx = false;
+                    if remaining >= 2 && args[index + 1] == b"~" {
+                        parsed.approx = true;
+                        index += 1;
+                    } else if remaining >= 2 && args[index + 1] == b"=" {
+                        index += 1;
+                    }
+                    if option == "MAXLEN" {
+                        let Ok(value) = parse_i64(&args[index + 1]) else {
+                            return Err(Outcome::error(
+                                "ERR value is not an integer or out of range",
+                            ));
+                        };
+                        if value < 0 {
+                            return Err(Outcome::error("ERR The MAXLEN argument must be >= 0."));
+                        }
+                        parsed.strategy = StreamTrimStrategy::MaxLen(value as usize);
+                    } else {
+                        let Some(value) = parse_stream_id(&args[index + 1], 0, true) else {
+                            return Err(invalid_stream_id());
+                        };
+                        parsed.strategy = StreamTrimStrategy::MinId(value);
+                    }
+                    parsed.value_index = index + 1;
+                    index += 2;
+                }
+                "LIMIT" if remaining > 0 => {
+                    let Ok(value) = parse_i64(&args[index + 1]) else {
+                        return Err(Outcome::error(
+                            "ERR value is not an integer or out of range",
+                        ));
+                    };
+                    if value < 0 {
+                        return Err(Outcome::error("ERR The LIMIT argument must be >= 0."));
+                    }
+                    parsed.limit = value as usize;
+                    parsed.limit_given = true;
+                    index += 2;
+                }
+                "NOMKSTREAM" if xadd => {
+                    parsed.nomkstream = true;
+                    index += 1;
+                }
+                _ if xadd => {
+                    let Some(id) = parse_stream_id(&args[index], 0, true) else {
+                        return Err(invalid_stream_id());
+                    };
+                    parsed.id = Some(id);
+                    parsed.id_given = true;
+                    parsed.id_position = index;
+                    break;
+                }
+                _ => return Err(Outcome::error("ERR syntax error")),
+            }
+        }
+        if parsed.limit != 0 && matches!(parsed.strategy, StreamTrimStrategy::None) {
+            return Err(Outcome::error(
+                "ERR syntax error, LIMIT cannot be used without specifying a trimming strategy",
+            ));
+        }
+        if !xadd && matches!(parsed.strategy, StreamTrimStrategy::None) {
+            return Err(Outcome::error(
+                "ERR syntax error, XTRIM must be called with a trimming strategy",
+            ));
+        }
+        if parsed.limit_given && !parsed.approx {
+            return Err(Outcome::error(
+                "ERR syntax error, LIMIT cannot be used without the special ~ option",
+            ));
+        }
+        if parsed.approx && !parsed.limit_given {
+            parsed.limit = 100 * self.stream_node_max_entries();
+        }
+        if self.loading {
+            parsed.limit = 0;
+        }
+        Ok(parsed)
     }
 
     fn cmd_geoadd(&mut self, args: &[Vec<u8>], db_index: usize, version: RespVersion) -> Outcome {
@@ -5915,6 +7815,7 @@ impl State {
                     block: None,
                     wake: Vec::new(),
                     unblock: Some((id, as_error)),
+                    aof_commands: None,
                 }
             }
             "SETINFO" => Outcome::ok(),
@@ -6056,11 +7957,36 @@ impl State {
         entries
     }
 
+    fn append_aof_commands(&mut self, db: usize, commands: &[Vec<Vec<u8>>]) {
+        if self.loading {
+            return;
+        }
+        let Some(writer) = self.aof.as_mut() else {
+            return;
+        };
+        for args in commands {
+            if let Err(err) = writer.append(db, args) {
+                self.aof_last_write_status = format!("err: {err}");
+            }
+        }
+    }
+
     fn aof_propagate(&mut self, db: usize, command: &Command, outcome: &Outcome) {
         let Some(name) = command.name() else {
             return;
         };
         let name = String::from_utf8_lossy(name).to_ascii_uppercase();
+        if let Some(commands) = &outcome.aof_commands {
+            let Some(writer) = self.aof.as_mut() else {
+                return;
+            };
+            for args in commands {
+                if let Err(err) = writer.append(db, args) {
+                    self.aof_last_write_status = format!("err: {err}");
+                }
+            }
+            return;
+        }
         if !is_aof_write(&name) {
             return;
         }
@@ -6592,6 +8518,156 @@ fn hll_error(error: hll::HllError) -> Outcome {
     }
 }
 
+#[derive(Debug, Clone)]
+enum StreamTrimStrategy {
+    None,
+    MaxLen(usize),
+    MinId(StreamId),
+}
+
+struct ParsedStreamTrim {
+    strategy: StreamTrimStrategy,
+    approx: bool,
+    limit: usize,
+    limit_given: bool,
+    value_index: usize,
+    id: Option<StreamId>,
+    id_given: bool,
+    nomkstream: bool,
+    id_position: usize,
+}
+
+fn parse_stream_id(value: &[u8], default_seq: u64, strict: bool) -> Option<StreamId> {
+    let text = std::str::from_utf8(value).ok()?;
+    if strict && (text == "-" || text == "+") {
+        return None;
+    }
+    StreamId::parse(text, default_seq)
+}
+
+fn parse_stream_range(value: &[u8], missing_seq: u64) -> Result<(StreamId, bool), Outcome> {
+    if value.len() > 1 && value[0] == b'(' {
+        match parse_stream_id(&value[1..], missing_seq, true) {
+            Some(id) => Ok((id, true)),
+            None => Err(invalid_stream_id()),
+        }
+    } else {
+        match parse_stream_id(value, missing_seq, false) {
+            Some(id) => Ok((id, false)),
+            None => Err(invalid_stream_id()),
+        }
+    }
+}
+
+fn invalid_stream_id() -> Outcome {
+    Outcome::error("ERR Invalid stream ID specified as stream command argument")
+}
+
+fn stream_entry_reply(entry: &StreamEntry) -> RespValue {
+    stream_entry_reply_fields(entry.id, &entry.fields)
+}
+
+fn stream_entry_reply_fields(id: StreamId, fields: &[(Vec<u8>, Vec<u8>)]) -> RespValue {
+    let mut pairs = Vec::with_capacity(fields.len() * 2);
+    for (field, value) in fields {
+        pairs.push(RespValue::bulk(field.clone()));
+        pairs.push(RespValue::bulk(value.clone()));
+    }
+    RespValue::Array(vec![
+        RespValue::bulk(id.to_string().into_bytes()),
+        RespValue::Array(pairs),
+    ])
+}
+
+fn no_group_message(key: &[u8], group: &[u8], xreadgroup: bool) -> Vec<u8> {
+    if xreadgroup {
+        format!(
+            "NOGROUP No such key '{}' or consumer group '{}' in XREADGROUP with GROUP option",
+            String::from_utf8_lossy(key),
+            String::from_utf8_lossy(group)
+        )
+        .into_bytes()
+    } else {
+        format!(
+            "NOGROUP No such key '{}' or consumer group '{}'",
+            String::from_utf8_lossy(key),
+            String::from_utf8_lossy(group)
+        )
+        .into_bytes()
+    }
+}
+
+fn xgroup_syntax_error(subcommand: &[u8]) -> Outcome {
+    Outcome::error(format!(
+        "ERR Unknown subcommand or wrong number of arguments for '{}'. Try XGROUP HELP.",
+        String::from_utf8_lossy(subcommand)
+    ))
+}
+
+fn xinfo_syntax_error() -> Outcome {
+    Outcome::error(
+        "ERR Unknown subcommand or wrong number of arguments for 'XINFO'. Try XINFO HELP.",
+    )
+}
+
+fn stream_read_reply(served: &[(Vec<u8>, Vec<RespValue>)], version: RespVersion) -> RespValue {
+    if matches!(version, RespVersion::V3) {
+        RespValue::Map(
+            served
+                .iter()
+                .map(|(key, entries)| {
+                    (
+                        RespValue::bulk(key.clone()),
+                        RespValue::Array(entries.clone()),
+                    )
+                })
+                .collect(),
+        )
+    } else {
+        RespValue::Array(
+            served
+                .iter()
+                .map(|(key, entries)| {
+                    RespValue::Array(vec![
+                        RespValue::bulk(key.clone()),
+                        RespValue::Array(entries.clone()),
+                    ])
+                })
+                .collect(),
+        )
+    }
+}
+
+fn stream_xclaim_command(
+    key: &[u8],
+    group: &[u8],
+    consumer: &[u8],
+    id: StreamId,
+    delivery_time: i64,
+    delivery_count: u64,
+    last_id: StreamId,
+) -> Vec<Vec<u8>> {
+    vec![
+        b"XCLAIM".to_vec(),
+        key.to_vec(),
+        group.to_vec(),
+        consumer.to_vec(),
+        b"0".to_vec(),
+        id.to_string().into_bytes(),
+        b"TIME".to_vec(),
+        delivery_time.to_string().into_bytes(),
+        b"RETRYCOUNT".to_vec(),
+        delivery_count.to_string().into_bytes(),
+        b"FORCE".to_vec(),
+        b"JUSTID".to_vec(),
+        b"LASTID".to_vec(),
+        last_id.to_string().into_bytes(),
+    ]
+}
+
+type StreamFields = Vec<(Vec<u8>, Vec<u8>)>;
+type StreamReadResult = (Vec<RespValue>, Vec<Vec<Vec<u8>>>);
+
 struct GeoPoint {
     member: Vec<u8>,
     score: f64,
@@ -6764,6 +8840,15 @@ fn is_aof_write(name: &str) -> bool {
             | "SWAPDB"
             | "RESTORE"
             | "GEOADD"
+            | "XADD"
+            | "XDEL"
+            | "XTRIM"
+            | "XSETID"
+            | "XGROUP"
+            | "XACK"
+            | "XCLAIM"
+            | "XAUTOCLAIM"
+            | "XREADGROUP"
             | "PFADD"
             | "PFMERGE"
             | "GEORADIUS"
@@ -7163,6 +9248,7 @@ fn is_modifiable_config(key: &str) -> bool {
             | "zset-max-ziplist-entries"
             | "zset-max-ziplist-value"
             | "hll-sparse-max-bytes"
+            | "stream-node-max-entries"
     )
 }
 

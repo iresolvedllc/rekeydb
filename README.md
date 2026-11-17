@@ -20,13 +20,15 @@ Bootstrap / P0. Working today:
 - an MVCC snapshot database with tombstones, nested read views, COW values,
   and KeyDB-compatible timestamps;
 - strings (including bitmaps/BITFIELD and HyperLogLog), lists, hashes, sets,
-  sorted sets, GEO commands, expiry, keyspace commands,
+  sorted sets, streams with consumer groups, GEO commands, expiry, keyspace
+  commands,
   `OBJECT ENCODING`,
   `DEBUG MVCC`, `DEBUG PROTOCOL`, `HELLO`, `CLIENT`, `CONFIG`, `INFO`, basic
   `MULTI`/`EXEC`/`WATCH`, `SORT`, and a conformance harness passing all 22
   KeyDB `unit/protocol.tcl` tests, all 176 `unit/type/list.tcl` tests,
   all 76 `unit/type/hash.tcl` tests, all 254 `unit/type/zset.tcl` tests,
-  all 56 `unit/geo.tcl` tests, and all 20 `unit/hyperloglog.tcl` tests;
+  all 56 `unit/geo.tcl` tests, all 20 `unit/hyperloglog.tcl` tests, all
+  56 `unit/type/stream.tcl` tests, and all 51 `unit/keyspace.tcl` tests;
 - RDB v9 save/load, `SAVE`/`BGSAVE`, `DEBUG RELOAD`, `DEBUG DIGEST`, and
   `DUMP`/`RESTORE`, cross-compatible with KeyDB in both directions for strings, lists, hashes,
   sets, sorted sets, and expirations;

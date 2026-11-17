@@ -137,6 +137,7 @@ fn object_type(value: &Value) -> Result<u8, RdbError> {
         Value::Set(_) => Err(RdbError::UnsupportedValue("empty set")),
         Value::Hash(_) => Ok(RDB_TYPE_HASH),
         Value::ZSet(_) => Ok(RDB_TYPE_ZSET_2),
+        Value::Stream(_) => Err(RdbError::UnsupportedValue("stream")),
     }
 }
 
@@ -169,6 +170,7 @@ fn write_object_value(out: &mut Vec<u8>, value: &Value) -> Result<(), RdbError> 
                 out.extend_from_slice(&score.to_bits().to_le_bytes());
             }
         }
+        Value::Stream(_) => return Err(RdbError::UnsupportedValue("stream")),
     }
     Ok(())
 }

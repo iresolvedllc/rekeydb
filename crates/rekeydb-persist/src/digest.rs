@@ -46,6 +46,7 @@ fn xor_object_digest(digest: &mut [u8; 20], value: &Value, has_expire: bool) {
         Value::Set(_) => 2,
         Value::ZSet(_) => 3,
         Value::Hash(_) => 4,
+        Value::Stream(_) => 6,
     };
     mix_digest(digest, &type_id.to_be_bytes());
     match value {
@@ -74,6 +75,18 @@ fn xor_object_digest(digest: &mut [u8; 20], value: &Value, has_expire: bool) {
                 mix_digest(&mut element, member);
                 mix_digest(&mut element, format_double_17g(*score).as_bytes());
                 xor_digest(digest, &element);
+            }
+        }
+        Value::Stream(stream) => {
+            for entry in stream.iter() {
+                mix_digest(
+                    digest,
+                    format!("{}.{}", entry.id.ms, entry.id.seq).as_bytes(),
+                );
+                for (field, value) in &entry.fields {
+                    mix_digest(digest, field);
+                    mix_digest(digest, value);
+                }
             }
         }
     }

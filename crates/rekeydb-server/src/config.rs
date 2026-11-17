@@ -4,6 +4,7 @@
 //! extractor records the full KeyDB configuration surface so the remaining
 //! options can be implemented without drifting.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,8 @@ pub struct Config {
     pub aof_load_truncated: bool,
     pub logfile: Option<String>,
     pub config_file: Option<PathBuf>,
+    /// Raw startup directives, used to seed the runtime CONFIG view.
+    pub settings: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -42,6 +45,7 @@ impl Default for Config {
             aof_load_truncated: true,
             logfile: None,
             config_file: None,
+            settings: BTreeMap::new(),
         }
     }
 }
@@ -197,6 +201,9 @@ pub fn parse_str(text: &str) -> Result<Config, String> {
         let key = parts.next().unwrap_or_default().trim();
         let value = parts.next().unwrap_or_default().trim();
         let value = unquote(value);
+        config
+            .settings
+            .insert(key.to_ascii_lowercase(), value.to_string());
         match key.to_ascii_lowercase().as_str() {
             "bind" => {
                 if let Some(first) = value.split_whitespace().find(|part| !part.starts_with('-')) {

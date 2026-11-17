@@ -5,7 +5,7 @@ use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use rekeydb_core::{Value, format_double_17g};
+use rekeydb_core::{Stream, StreamGroup, Value, format_double_17g};
 use rekeydb_protocol::{Command, RespDecoder, encode_command};
 
 use crate::rdb::RdbEntry;
@@ -260,6 +260,9 @@ fn write_entry(writer: &mut AofWriter, db: usize, entry: &RdbEntry) -> std::io::
                 writer.append(db, &args)?;
             }
         }
+        Value::Stream(stream) => {
+            write_stream(writer, db, &entry.key, stream)?;
+        }
         Value::ZSet(zset) => {
             let mut items: Vec<(&Vec<u8>, f64)> = zset
                 .scores
@@ -293,6 +296,111 @@ fn write_entry(writer: &mut AofWriter, db: usize, entry: &RdbEntry) -> std::io::
                 expire.to_string().into_bytes(),
             ],
         )?;
+    }
+    Ok(())
+}
+
+fn write_stream(
+    writer: &mut AofWriter,
+    db: usize,
+    key: &[u8],
+    stream: &Stream,
+) -> std::io::Result<()> {
+    if stream.is_empty() {
+        // Redis creates empty streams with a trimmed-away XADD.
+        writer.append(
+            db,
+            &[
+                b"XADD".to_vec(),
+                key.to_vec(),
+                b"MAXLEN".to_vec(),
+                b"0".to_vec(),
+                b"0-1".to_vec(),
+                b"x".to_vec(),
+                b"y".to_vec(),
+            ],
+        )?;
+    } else {
+        for entry in stream.iter() {
+            let mut args = vec![
+                b"XADD".to_vec(),
+                key.to_vec(),
+                entry.id.to_string().into_bytes(),
+            ];
+            for (field, value) in &entry.fields {
+                args.push(field.clone());
+                args.push(value.clone());
+            }
+            writer.append(db, &args)?;
+        }
+    }
+    writer.append(
+        db,
+        &[
+            b"XSETID".to_vec(),
+            key.to_vec(),
+            stream.last_id.to_string().into_bytes(),
+        ],
+    )?;
+    for (name, group) in &stream.groups {
+        writer.append(
+            db,
+            &[
+                b"XGROUP".to_vec(),
+                b"CREATE".to_vec(),
+                key.to_vec(),
+                name.clone(),
+                group.last_delivered_id.to_string().into_bytes(),
+            ],
+        )?;
+        write_group(writer, db, key, name, group)?;
+    }
+    Ok(())
+}
+
+fn write_group(
+    writer: &mut AofWriter,
+    db: usize,
+    key: &[u8],
+    name: &[u8],
+    group: &StreamGroup,
+) -> std::io::Result<()> {
+    for (consumer_name, consumer) in &group.consumers {
+        if consumer.pel.is_empty() {
+            writer.append(
+                db,
+                &[
+                    b"XGROUP".to_vec(),
+                    b"CREATECONSUMER".to_vec(),
+                    key.to_vec(),
+                    name.to_vec(),
+                    consumer_name.clone(),
+                ],
+            )?;
+            continue;
+        }
+        for id in &consumer.pel {
+            let Some(nack) = group.pel.get(id) else {
+                continue;
+            };
+            writer.append(
+                db,
+                &[
+                    b"XCLAIM".to_vec(),
+                    key.to_vec(),
+                    name.to_vec(),
+                    consumer_name.clone(),
+                    b"0".to_vec(),
+                    id.to_string().into_bytes(),
+                    b"TIME".to_vec(),
+                    nack.delivery_time.to_string().into_bytes(),
+                    b"RETRYCOUNT".to_vec(),
+                    nack.delivery_count.to_string().into_bytes(),
+                    b"JUSTID".to_vec(),
+                    b"FORCE".to_vec(),
+                ],
+            )?;
+        }
     }
     Ok(())
 }
