@@ -1,6 +1,8 @@
 //! rekeydb server library.
 
 pub mod config;
+pub mod geo;
+pub mod hll;
 pub mod server;
 pub mod state;
 pub mod util;

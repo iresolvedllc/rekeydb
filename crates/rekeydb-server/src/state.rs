@@ -11,6 +11,8 @@ use rekeydb_persist::{RdbEntry, dataset_digest, dump, load, restore, save, value
 use rekeydb_protocol::{Command, RespValue, RespVersion};
 
 use crate::config::Config;
+use crate::geo;
+use crate::hll;
 use crate::util::glob_match;
 
 /// The per-connection state the command layer is allowed to touch.
@@ -194,6 +196,7 @@ impl State {
             "set-max-intset-entries",
             "zset-max-ziplist-entries",
             "zset-max-ziplist-value",
+            "hll-sparse-max-bytes",
         ] {
             config_values.insert(key.to_string(), String::new());
         }
@@ -262,6 +265,9 @@ impl State {
         self.config_values
             .entry("proto-max-bulk-len".into())
             .or_insert_with(|| "512mb".into());
+        self.config_values
+            .entry("hll-sparse-max-bytes".into())
+            .or_insert_with(|| "3000".into());
         self.config_values.insert(
             "aof-use-rdb-preamble".into(),
             if self.config.aof_use_rdb_preamble {
@@ -678,6 +684,27 @@ impl State {
                 self.cmd_zset(&name, args, client.db, client.version)
             }
             "BZPOPMIN" | "BZPOPMAX" => self.cmd_bzpop(&name, args, client.db),
+            "PFADD" => self.cmd_pfadd(args, client.db),
+            "PFCOUNT" => self.cmd_pfcount(args, client.db),
+            "PFMERGE" => self.cmd_pfmerge(args, client.db),
+            "PFDEBUG" => self.cmd_pfdebug(args, client.db),
+            "PFSELFTEST" => {
+                if args.len() != 1 {
+                    wrong_args(args)
+                } else {
+                    self.cmd_pfselftest()
+                }
+            }
+            "GEOADD" => self.cmd_geoadd(args, client.db, client.version),
+            "GEOPOS" => self.cmd_geopos(args, client.db),
+            "GEOHASH" => self.cmd_geohash(args, client.db),
+            "GEODIST" => self.cmd_geodist(args, client.db),
+            "GEORADIUS"
+            | "GEORADIUS_RO"
+            | "GEORADIUSBYMEMBER"
+            | "GEORADIUSBYMEMBER_RO"
+            | "GEOSEARCH"
+            | "GEOSEARCHSTORE" => self.cmd_geo_search(&name, args, client.db),
             "KEYDB.HRENAME" => self.cmd_hrename(args, client.db),
             "HSET" | "HSETNX" | "HMSET" | "HGET" | "HMGET" | "HDEL" | "HLEN" | "HSTRLEN"
             | "HKEYS" | "HVALS" | "HGETALL" | "HEXISTS" | "HINCRBY" | "HINCRBYFLOAT"
@@ -2940,6 +2967,737 @@ impl State {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn hll_sparse_max_bytes(&self) -> usize {
+        self.config_values
+            .get("hll-sparse-max-bytes")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(3000)
+    }
+
+    fn hll_lookup(&mut self, db_index: usize, key: &[u8]) -> Result<Option<Vec<u8>>, Outcome> {
+        self.expire_if_needed(db_index, key);
+        match self.dbs[db_index].get(key) {
+            Some(entry) => match entry.value.as_string() {
+                Some(bytes) => Ok(Some(bytes.clone())),
+                None => Err(wrong_type()),
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn cmd_pfadd(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        let key = &args[1];
+        let mut data = match self.hll_lookup(db_index, key) {
+            Ok(Some(data)) => {
+                if let Err(error) = hll::validate(&data) {
+                    return hll_error(error);
+                }
+                data
+            }
+            Ok(None) => hll::create(),
+            Err(outcome) => return outcome,
+        };
+        let created = !self.dbs[db_index].contains_key(key);
+        let mut updated = usize::from(created);
+        match hll::add_elements(&mut data, &args[2..], self.hll_sparse_max_bytes()) {
+            Ok(count) => updated += count,
+            Err(error) => return hll_error(error),
+        }
+        if updated > 0 {
+            let mvcc = self.clock.next(self.now_ms());
+            self.dbs[db_index].insert(key, Value::String(data), mvcc);
+            return Outcome::reply(RespValue::Integer(1));
+        }
+        Outcome::reply(RespValue::Integer(0))
+    }
+
+    fn cmd_pfcount(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        if args.len() == 2 {
+            let key = &args[1];
+            let mut data = match self.hll_lookup(db_index, key) {
+                Ok(Some(data)) => data,
+                Ok(None) => return Outcome::reply(RespValue::Integer(0)),
+                Err(outcome) => return outcome,
+            };
+            if let Err(error) = hll::validate(&data) {
+                return hll_error(error);
+            }
+            if let Some(card) = hll::cache_card(&data) {
+                return Outcome::reply(RespValue::Integer(card as i64));
+            }
+            let card = match hll::count(&data) {
+                Ok(card) => card,
+                Err(error) => return hll_error(error),
+            };
+            hll::set_cache(&mut data, card);
+            let mvcc = self.clock.next(self.now_ms());
+            self.dbs[db_index].insert(key, Value::String(data), mvcc);
+            return Outcome::reply(RespValue::Integer(card as i64));
+        }
+
+        let mut registers = [0u8; hll::REGISTERS];
+        for key in &args[1..] {
+            let data = match self.hll_lookup(db_index, key) {
+                Ok(Some(data)) => data,
+                Ok(None) => continue,
+                Err(outcome) => return outcome,
+            };
+            if let Err(error) = hll::validate(&data) {
+                return hll_error(error);
+            }
+            if let Err(error) = hll::merge(&data, &mut registers) {
+                return hll_error(error);
+            }
+        }
+        Outcome::reply(RespValue::Integer(hll::count_registers(&registers) as i64))
+    }
+
+    fn cmd_pfmerge(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 2 {
+            return wrong_args(args);
+        }
+        let mut registers = [0u8; hll::REGISTERS];
+        let mut use_dense = false;
+        for key in &args[1..] {
+            let data = match self.hll_lookup(db_index, key) {
+                Ok(Some(data)) => data,
+                Ok(None) => continue,
+                Err(outcome) => return outcome,
+            };
+            if let Err(error) = hll::validate(&data) {
+                return hll_error(error);
+            }
+            if hll::encoding(&data) == hll::DENSE {
+                use_dense = true;
+            }
+            if let Err(error) = hll::merge(&data, &mut registers) {
+                return hll_error(error);
+            }
+        }
+
+        let destination = &args[1];
+        let mut data = match self.hll_lookup(db_index, destination) {
+            Ok(Some(data)) => data,
+            Ok(None) => hll::create(),
+            Err(outcome) => return outcome,
+        };
+        if use_dense && let Err(error) = hll::sparse_to_dense(&mut data) {
+            return hll_error(error);
+        }
+        let sparse_max = self.hll_sparse_max_bytes();
+        for (index, value) in registers.iter().enumerate() {
+            if *value == 0 {
+                continue;
+            }
+            if let Err(error) = hll::set_register(&mut data, index, *value, sparse_max) {
+                return hll_error(error);
+            }
+        }
+        hll::invalidate_cache(&mut data);
+        let mvcc = self.clock.next(self.now_ms());
+        self.dbs[db_index].insert(destination, Value::String(data), mvcc);
+        Outcome::ok()
+    }
+
+    fn cmd_pfdebug(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let subcommand = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+        if args.len() != 3 {
+            return Outcome::error(format!(
+                "ERR Wrong number of arguments for the '{}' subcommand",
+                String::from_utf8_lossy(&args[1])
+            ));
+        }
+        let key = &args[2];
+        let mut data = match self.hll_lookup(db_index, key) {
+            Ok(Some(data)) => data,
+            Ok(None) => return Outcome::error("ERR The specified key does not exist"),
+            Err(outcome) => return outcome,
+        };
+        if let Err(error) = hll::validate(&data) {
+            return hll_error(error);
+        }
+        match subcommand.as_str() {
+            "GETREG" => {
+                let registers = match hll::get_registers(&mut data) {
+                    Ok(registers) => registers,
+                    Err(error) => return hll_error(error),
+                };
+                let mvcc = self.clock.next(self.now_ms());
+                self.dbs[db_index].insert(key, Value::String(data), mvcc);
+                Outcome::reply(RespValue::Array(
+                    registers
+                        .into_iter()
+                        .map(|value| RespValue::Integer(i64::from(value)))
+                        .collect(),
+                ))
+            }
+            "DECODE" => match hll::decode_sparse(&data) {
+                Some(decoded) => Outcome::reply(RespValue::bulk(decoded.into_bytes())),
+                None => Outcome::error("ERR HLL encoding is not sparse"),
+            },
+            "ENCODING" => {
+                Outcome::reply(RespValue::simple(if hll::encoding(&data) == hll::DENSE {
+                    "dense"
+                } else {
+                    "sparse"
+                }))
+            }
+            "TODENSE" => {
+                let converted = match hll::sparse_to_dense(&mut data) {
+                    Ok(converted) => converted,
+                    Err(error) => return hll_error(error),
+                };
+                if converted {
+                    let mvcc = self.clock.next(self.now_ms());
+                    self.dbs[db_index].insert(key, Value::String(data), mvcc);
+                }
+                Outcome::reply(RespValue::Integer(i64::from(converted)))
+            }
+            _ => Outcome::error(format!(
+                "ERR Unknown PFDEBUG subcommand '{}'",
+                String::from_utf8_lossy(&args[1])
+            )),
+        }
+    }
+
+    fn cmd_pfselftest(&mut self) -> Outcome {
+        let mut dense = hll::create();
+        if hll::sparse_to_dense(&mut dense).is_err() {
+            return Outcome::error("ERR TESTFAILED Could not create dense HLL");
+        }
+        let mut sparse = hll::create();
+        for value in 0..2000u32 {
+            let element = value.to_le_bytes().to_vec();
+            let elements = std::slice::from_ref(&element);
+            if hll::add_elements(&mut dense, elements, usize::MAX).is_err()
+                || hll::add_elements(&mut sparse, elements, usize::MAX).is_err()
+            {
+                return Outcome::error("ERR TESTFAILED HLL add failed");
+            }
+        }
+        let dense_count = hll::count(&dense).unwrap_or(0);
+        let sparse_count = hll::count(&sparse).unwrap_or(0);
+        if dense_count != sparse_count {
+            return Outcome::error("ERR TESTFAILED Dense and sparse representations disagree");
+        }
+        Outcome::ok()
+    }
+
+    fn cmd_geoadd(&mut self, args: &[Vec<u8>], db_index: usize, version: RespVersion) -> Outcome {
+        if args.len() < 5 {
+            return wrong_args(args);
+        }
+        let mut nx = false;
+        let mut xx = false;
+        let mut longidx = 2;
+        while longidx < args.len() {
+            let option = String::from_utf8_lossy(&args[longidx]).to_ascii_uppercase();
+            match option.as_str() {
+                "NX" => nx = true,
+                "XX" => xx = true,
+                "CH" => {}
+                _ => break,
+            }
+            longidx += 1;
+        }
+        if !(args.len() - longidx).is_multiple_of(3) || (xx && nx) {
+            return Outcome::error("ERR syntax error");
+        }
+        if longidx == args.len() {
+            return wrong_args(args);
+        }
+
+        // GEOADD is a thin wrapper over ZADD: coordinates are encoded as
+        // 52-bit geohash scores and handed to the regular sorted-set path.
+        let mut zadd_args = vec![b"ZADD".to_vec(), args[1].clone()];
+        zadd_args.extend_from_slice(&args[2..longidx]);
+        for triple in args[longidx..].chunks(3) {
+            let (longitude, latitude) = match parse_geo_coordinates(&triple[..2]) {
+                Ok(pair) => pair,
+                Err(outcome) => return outcome,
+            };
+            let Some(hash) = geo::encode(longitude, latitude, geo::GEO_STEP_MAX) else {
+                return invalid_geo_pair(longitude, latitude);
+            };
+            let bits = geo::align52_bits(hash);
+            zadd_args.push(bits.to_string().into_bytes());
+            zadd_args.push(triple[2].clone());
+        }
+        self.cmd_zadd(&zadd_args, db_index, version)
+    }
+
+    fn cmd_geopos(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let zset = match self.get_zset(db_index, &args[1]) {
+            Ok(zset) => zset,
+            Err(outcome) => return outcome,
+        };
+        let mut values = Vec::with_capacity(args.len() - 2);
+        for member in &args[2..] {
+            let point = zset
+                .as_ref()
+                .and_then(|zset| zset.scores.get(member))
+                .and_then(|score| geo::decode_score(*score));
+            match point {
+                Some((longitude, latitude)) => values.push(RespValue::Array(vec![
+                    RespValue::bulk(format_geo_coordinate(longitude).into_bytes()),
+                    RespValue::bulk(format_geo_coordinate(latitude).into_bytes()),
+                ])),
+                None => values.push(RespValue::NullArray),
+            }
+        }
+        Outcome::reply(RespValue::Array(values))
+    }
+
+    fn cmd_geohash(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 3 {
+            return wrong_args(args);
+        }
+        let zset = match self.get_zset(db_index, &args[1]) {
+            Ok(zset) => zset,
+            Err(outcome) => return outcome,
+        };
+        const ALPHABET: &[u8; 32] = b"0123456789bcdefghjkmnpqrstuvwxyz";
+        let mut values = Vec::with_capacity(args.len() - 2);
+        for member in &args[2..] {
+            let point = zset
+                .as_ref()
+                .and_then(|zset| zset.scores.get(member))
+                .and_then(|score| geo::decode_score(*score));
+            match point {
+                Some((longitude, latitude)) => {
+                    let hash = geo::encode_standard(longitude, latitude, geo::GEO_STEP_MAX)
+                        .unwrap_or_default();
+                    let mut text = Vec::with_capacity(11);
+                    for index in 0..11 {
+                        let character = if index == 10 {
+                            0
+                        } else {
+                            ((hash.bits >> (52 - ((index + 1) * 5))) & 0x1f) as usize
+                        };
+                        text.push(ALPHABET[character]);
+                    }
+                    values.push(RespValue::bulk(text));
+                }
+                None => values.push(RespValue::null()),
+            }
+        }
+        Outcome::reply(RespValue::Array(values))
+    }
+
+    fn cmd_geodist(&mut self, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        if args.len() < 4 {
+            return wrong_args(args);
+        }
+        if args.len() > 5 {
+            return Outcome::error("ERR syntax error");
+        }
+        let conversion = if args.len() == 5 {
+            match parse_geo_unit(&args[4]) {
+                Ok(conversion) => conversion,
+                Err(outcome) => return outcome,
+            }
+        } else {
+            1.0
+        };
+        let zset = match self.get_zset(db_index, &args[1]) {
+            Ok(zset) => zset,
+            Err(outcome) => return outcome,
+        };
+        let Some(zset) = zset else {
+            return Outcome::reply(RespValue::null());
+        };
+        let Some(first) = zset.scores.get(&args[2]).copied() else {
+            return Outcome::reply(RespValue::null());
+        };
+        let Some(second) = zset.scores.get(&args[3]).copied() else {
+            return Outcome::reply(RespValue::null());
+        };
+        let (Some((lon1, lat1)), Some((lon2, lat2))) =
+            (geo::decode_score(first), geo::decode_score(second))
+        else {
+            return Outcome::reply(RespValue::null());
+        };
+        let distance = geo::distance(lon1, lat1, lon2, lat2) / conversion;
+        Outcome::reply(RespValue::bulk(format!("{distance:.4}").into_bytes()))
+    }
+
+    fn cmd_geo_search(&mut self, command: &str, args: &[Vec<u8>], db_index: usize) -> Outcome {
+        let search = matches!(command, "GEOSEARCH" | "GEOSEARCHSTORE");
+        let search_store = command == "GEOSEARCHSTORE";
+        let nostore = matches!(command, "GEORADIUS_RO" | "GEORADIUSBYMEMBER_RO");
+        let by_member = matches!(command, "GEORADIUSBYMEMBER" | "GEORADIUSBYMEMBER_RO");
+        let by_coords = matches!(command, "GEORADIUS" | "GEORADIUS_RO");
+        let source_index = if search_store { 2 } else { 1 };
+        if args.len() <= source_index {
+            return wrong_args(args);
+        }
+
+        let mut source = match self.get_zset(db_index, &args[source_index]) {
+            Ok(zset) => zset,
+            Err(outcome) => return outcome,
+        };
+
+        let mut shape = geo::GeoShape::default();
+        let mut storekey: Option<Vec<u8>> = None;
+        let mut storedist = false;
+        let base_args;
+
+        if by_coords {
+            if args.len() < 6 {
+                return wrong_args(args);
+            }
+            base_args = 6;
+            shape.circular = true;
+            let (longitude, latitude) = match parse_geo_coordinates(&args[2..4]) {
+                Ok(pair) => pair,
+                Err(outcome) => return outcome,
+            };
+            shape.xy = (longitude, latitude);
+            shape.radius = match parse_geo_radius(&args[4]) {
+                Ok(radius) => radius,
+                Err(outcome) => return outcome,
+            };
+            shape.conversion = match parse_geo_unit(&args[5]) {
+                Ok(conversion) => conversion,
+                Err(outcome) => return outcome,
+            };
+        } else if by_member {
+            if args.len() < 5 {
+                return wrong_args(args);
+            }
+            base_args = 5;
+            shape.circular = true;
+            if let Some(zset) = &source {
+                let Some(score) = zset.scores.get(&args[2]).copied() else {
+                    return Outcome::error("ERR could not decode requested zset member");
+                };
+                let Some(point) = geo::decode_score(score) else {
+                    return Outcome::error("ERR could not decode requested zset member");
+                };
+                shape.xy = point;
+            }
+            shape.radius = match parse_geo_radius(&args[3]) {
+                Ok(radius) => radius,
+                Err(outcome) => return outcome,
+            };
+            shape.conversion = match parse_geo_unit(&args[4]) {
+                Ok(conversion) => conversion,
+                Err(outcome) => return outcome,
+            };
+        } else {
+            base_args = if search_store { 3 } else { 2 };
+            if args.len() < base_args {
+                return wrong_args(args);
+            }
+            if search_store {
+                storekey = Some(args[1].clone());
+            }
+        }
+
+        let mut withdist = false;
+        let mut withhash = false;
+        let mut withcoords = false;
+        let mut frommember = false;
+        let mut fromloc = false;
+        let mut byradius = false;
+        let mut bybox = false;
+        let mut any = false;
+        let mut sort: Option<bool> = None; // Some(true) = ascending.
+        let mut count: i64 = 0;
+        let mut index = base_args;
+        while index < args.len() {
+            let remaining = args.len() - index;
+            let option = String::from_utf8_lossy(&args[index]).to_ascii_uppercase();
+            match option.as_str() {
+                "WITHDIST" => {
+                    withdist = true;
+                    index += 1;
+                }
+                "WITHHASH" => {
+                    withhash = true;
+                    index += 1;
+                }
+                "WITHCOORD" => {
+                    withcoords = true;
+                    index += 1;
+                }
+                "ANY" => {
+                    any = true;
+                    index += 1;
+                }
+                "ASC" => {
+                    sort = Some(true);
+                    index += 1;
+                }
+                "DESC" => {
+                    sort = Some(false);
+                    index += 1;
+                }
+                "COUNT" if remaining > 1 => {
+                    let Ok(value) = parse_i64(&args[index + 1]) else {
+                        return Outcome::error("ERR value is not an integer or out of range");
+                    };
+                    if value <= 0 {
+                        return Outcome::error("ERR COUNT must be > 0");
+                    }
+                    count = value;
+                    index += 2;
+                }
+                "STORE" if remaining > 1 && !nostore && !search => {
+                    storekey = Some(args[index + 1].clone());
+                    storedist = false;
+                    index += 2;
+                }
+                "STOREDIST" if remaining > 1 && !nostore && !search => {
+                    storekey = Some(args[index + 1].clone());
+                    storedist = true;
+                    index += 2;
+                }
+                "STOREDIST" if search && search_store => {
+                    storedist = true;
+                    index += 1;
+                }
+                "FROMMEMBER" if remaining > 1 && search && !fromloc => {
+                    if let Some(zset) = &source {
+                        let Some(score) = zset.scores.get(&args[index + 1]).copied() else {
+                            return Outcome::error("ERR could not decode requested zset member");
+                        };
+                        let Some(point) = geo::decode_score(score) else {
+                            return Outcome::error("ERR could not decode requested zset member");
+                        };
+                        shape.xy = point;
+                    }
+                    frommember = true;
+                    index += 2;
+                }
+                "FROMLONLAT" if remaining > 2 && search && !frommember => {
+                    let (longitude, latitude) =
+                        match parse_geo_coordinates(&args[index + 1..index + 3]) {
+                            Ok(pair) => pair,
+                            Err(outcome) => return outcome,
+                        };
+                    shape.xy = (longitude, latitude);
+                    fromloc = true;
+                    index += 3;
+                }
+                "BYRADIUS" if remaining > 2 && search && !bybox => {
+                    shape.radius = match parse_geo_radius(&args[index + 1]) {
+                        Ok(radius) => radius,
+                        Err(outcome) => return outcome,
+                    };
+                    shape.conversion = match parse_geo_unit(&args[index + 2]) {
+                        Ok(conversion) => conversion,
+                        Err(outcome) => return outcome,
+                    };
+                    shape.circular = true;
+                    byradius = true;
+                    index += 3;
+                }
+                "BYBOX" if remaining > 3 && search && !byradius => {
+                    shape.width = match parse_geo_coordinate_value(&args[index + 1], "width") {
+                        Ok(value) => value,
+                        Err(outcome) => return outcome,
+                    };
+                    shape.height = match parse_geo_coordinate_value(&args[index + 2], "height") {
+                        Ok(value) => value,
+                        Err(outcome) => return outcome,
+                    };
+                    if shape.width < 0.0 || shape.height < 0.0 {
+                        return Outcome::error("ERR height or width cannot be negative");
+                    }
+                    shape.conversion = match parse_geo_unit(&args[index + 3]) {
+                        Ok(conversion) => conversion,
+                        Err(outcome) => return outcome,
+                    };
+                    shape.circular = false;
+                    bybox = true;
+                    index += 4;
+                }
+                _ => return Outcome::error("ERR syntax error"),
+            }
+        }
+
+        if storekey.is_some() && (withdist || withhash || withcoords) {
+            return Outcome::error(
+                "ERR STORE option in GEORADIUS is not compatible with WITHDIST, WITHHASH and WITHCOORDS options",
+            );
+        }
+        if search && !(frommember || fromloc) {
+            return Outcome::error(format!(
+                "ERR exactly one of FROMMEMBER or FROMLONLAT can be specified for {command}"
+            ));
+        }
+        if search && !(byradius || bybox) {
+            return Outcome::error(format!(
+                "ERR exactly one of BYRADIUS and BYBOX can be specified for {command}"
+            ));
+        }
+        if any && count == 0 {
+            return Outcome::error("ERR the ANY argument requires COUNT argument");
+        }
+
+        let Some(zset) = source.take() else {
+            if let Some(storekey) = &storekey {
+                self.dbs[db_index].remove(storekey);
+                return Outcome::reply(RespValue::Integer(0));
+            }
+            return Outcome::reply(RespValue::Array(Vec::new()));
+        };
+
+        if count != 0 && sort.is_none() && !any {
+            sort = Some(true);
+        }
+
+        let radius = geo::calculate_areas(&mut shape);
+        let limit = if any { count as usize } else { 0 };
+        let members = sorted_members(&zset, false);
+        let boxes = [
+            radius.hash,
+            radius.neighbors.north,
+            radius.neighbors.south,
+            radius.neighbors.east,
+            radius.neighbors.west,
+            radius.neighbors.north_east,
+            radius.neighbors.north_west,
+            radius.neighbors.south_east,
+            radius.neighbors.south_west,
+        ];
+        let mut points: Vec<GeoPoint> = Vec::new();
+        let mut last_processed: Option<geo::GeoHashBits> = None;
+        for hash in boxes {
+            if hash.is_zero() {
+                continue;
+            }
+            if let Some(previous) = last_processed
+                && previous.bits == hash.bits
+                && previous.step == hash.step
+            {
+                continue;
+            }
+            if !points.is_empty() && limit > 0 && points.len() >= limit {
+                break;
+            }
+            let (min, max) = geo::scores_of_box(hash);
+            let lower = members.partition_point(|(_, score)| *score < min as f64);
+            let upper = members.partition_point(|(_, score)| *score < max as f64);
+            for (member, score) in &members[lower..upper] {
+                let Some((longitude, latitude)) = geo::decode_score(*score) else {
+                    continue;
+                };
+                let distance = if shape.circular {
+                    geo::distance_if_in_circle(
+                        shape.xy.0,
+                        shape.xy.1,
+                        longitude,
+                        latitude,
+                        shape.radius * shape.conversion,
+                    )
+                } else {
+                    geo::distance_if_in_rectangle(
+                        shape.width * shape.conversion,
+                        shape.height * shape.conversion,
+                        shape.xy.0,
+                        shape.xy.1,
+                        longitude,
+                        latitude,
+                    )
+                };
+                let Some(distance) = distance else {
+                    continue;
+                };
+                points.push(GeoPoint {
+                    member: member.clone(),
+                    score: *score,
+                    longitude,
+                    latitude,
+                    distance,
+                });
+                if limit > 0 && points.len() >= limit {
+                    break;
+                }
+            }
+            last_processed = Some(hash);
+        }
+
+        if points.is_empty() && storekey.is_none() {
+            return Outcome::reply(RespValue::Array(Vec::new()));
+        }
+
+        if let Some(ascending) = sort {
+            points.sort_by(|left, right| {
+                let ordering = left
+                    .distance
+                    .partial_cmp(&right.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal);
+                if ascending {
+                    ordering
+                } else {
+                    ordering.reverse()
+                }
+            });
+        }
+
+        let returned_items = if count == 0 || (points.len() as i64) < count {
+            points.len()
+        } else {
+            count as usize
+        };
+
+        if let Some(storekey) = storekey {
+            if returned_items == 0 {
+                self.dbs[db_index].remove(&storekey);
+            } else {
+                let mut result = rekeydb_core::SortedSet::default();
+                for point in &points[..returned_items] {
+                    let distance = point.distance / shape.conversion;
+                    let score = if storedist { distance } else { point.score };
+                    result.scores.insert(point.member.clone(), score);
+                }
+                let mvcc = self.clock.next(self.now_ms());
+                self.dbs[db_index].insert(&storekey, Value::ZSet(result), mvcc);
+            }
+            return Outcome::reply(RespValue::Integer(returned_items as i64));
+        }
+
+        let option_length = usize::from(withdist) + usize::from(withhash) + usize::from(withcoords);
+        let mut values = Vec::with_capacity(returned_items);
+        for point in &points[..returned_items] {
+            if option_length == 0 {
+                values.push(RespValue::bulk(point.member.clone()));
+                continue;
+            }
+            let mut item = Vec::with_capacity(option_length + 1);
+            item.push(RespValue::bulk(point.member.clone()));
+            if withdist {
+                let distance = point.distance / shape.conversion;
+                item.push(RespValue::bulk(format!("{distance:.4}").into_bytes()));
+            }
+            if withhash {
+                item.push(RespValue::Integer(point.score as i64));
+            }
+            if withcoords {
+                item.push(RespValue::Array(vec![
+                    RespValue::bulk(format_geo_coordinate(point.longitude).into_bytes()),
+                    RespValue::bulk(format_geo_coordinate(point.latitude).into_bytes()),
+                ]));
+            }
+            values.push(RespValue::Array(item));
+        }
+        Outcome::reply(RespValue::Array(values))
     }
 
     fn cmd_zadd(&mut self, args: &[Vec<u8>], db_index: usize, version: RespVersion) -> Outcome {
@@ -5825,6 +6583,88 @@ fn lex_in_range(member: &[u8], min: &LexBound, max: &LexBound) -> bool {
     above && below
 }
 
+fn hll_error(error: hll::HllError) -> Outcome {
+    match error {
+        hll::HllError::Invalid => {
+            Outcome::error("WRONGTYPE Key is not a valid HyperLogLog string value.")
+        }
+        hll::HllError::Corrupted => Outcome::error("INVALIDOBJ Corrupted HLL object detected"),
+    }
+}
+
+struct GeoPoint {
+    member: Vec<u8>,
+    score: f64,
+    longitude: f64,
+    latitude: f64,
+    distance: f64,
+}
+
+fn parse_geo_coordinates(args: &[Vec<u8>]) -> Result<(f64, f64), Outcome> {
+    let Some(longitude) = parse_score(&args[0]) else {
+        return Err(Outcome::error("ERR value is not a valid float"));
+    };
+    let Some(latitude) = parse_score(&args[1]) else {
+        return Err(Outcome::error("ERR value is not a valid float"));
+    };
+    if !(geo::GEO_LONG_MIN..=geo::GEO_LONG_MAX).contains(&longitude)
+        || !(geo::GEO_LAT_MIN..=geo::GEO_LAT_MAX).contains(&latitude)
+    {
+        return Err(invalid_geo_pair(longitude, latitude));
+    }
+    Ok((longitude, latitude))
+}
+
+fn invalid_geo_pair(longitude: f64, latitude: f64) -> Outcome {
+    Outcome::error(format!(
+        "ERR invalid longitude,latitude pair {longitude:.6},{latitude:.6}"
+    ))
+}
+
+fn parse_geo_radius(value: &[u8]) -> Result<f64, Outcome> {
+    let Some(radius) = parse_score(value) else {
+        return Err(Outcome::error("ERR need numeric radius"));
+    };
+    if radius < 0.0 {
+        return Err(Outcome::error("ERR radius cannot be negative"));
+    }
+    Ok(radius)
+}
+
+fn parse_geo_coordinate_value(value: &[u8], name: &str) -> Result<f64, Outcome> {
+    match parse_score(value) {
+        Some(value) => Ok(value),
+        None => Err(Outcome::error(format!("ERR need numeric {name}"))),
+    }
+}
+
+fn parse_geo_unit(value: &[u8]) -> Result<f64, Outcome> {
+    match value {
+        b"m" => Ok(1.0),
+        b"km" => Ok(1000.0),
+        b"ft" => Ok(0.3048),
+        b"mi" => Ok(1609.34),
+        _ => Err(Outcome::error(
+            "ERR unsupported unit provided. please use m, km, ft, mi",
+        )),
+    }
+}
+
+/// Format a decoded coordinate the way `addReplyHumanLongDouble` does:
+/// seventeen fractional digits with trailing zeroes removed.
+fn format_geo_coordinate(value: f64) -> String {
+    let mut text = format!("{value:.17}");
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    text
+}
+
 fn sorted_members(zset: &rekeydb_core::SortedSet, reverse: bool) -> Vec<(Vec<u8>, f64)> {
     let mut members: Vec<(Vec<u8>, f64)> = zset
         .scores
@@ -5923,6 +6763,12 @@ fn is_aof_write(name: &str) -> bool {
             | "COPY"
             | "SWAPDB"
             | "RESTORE"
+            | "GEOADD"
+            | "PFADD"
+            | "PFMERGE"
+            | "GEORADIUS"
+            | "GEORADIUSBYMEMBER"
+            | "GEOSEARCHSTORE"
             | "FLUSHDB"
             | "FLUSHALL"
             | "LPUSH"
@@ -6316,6 +7162,7 @@ fn is_modifiable_config(key: &str) -> bool {
             | "set-max-intset-entries"
             | "zset-max-ziplist-entries"
             | "zset-max-ziplist-value"
+            | "hll-sparse-max-bytes"
     )
 }
 

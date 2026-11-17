@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 167 / 236
+Implemented: 182 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -8,9 +8,9 @@ Implemented: 167 / 236
 | @bitmap | 7 | 7 |
 | @connection | 7 | 8 |
 | @dangerous | 2 | 2 |
-| @geo | 0 | 10 |
+| @geo | 10 | 10 |
 | @hash | 17 | 19 |
-| @hyperloglog | 0 | 5 |
+| @hyperloglog | 5 | 5 |
 | @keyspace | 31 | 39 |
 | @list | 21 | 21 |
 | @replication | 0 | 3 |
@@ -51,21 +51,6 @@ Implemented: 167 / 236
 - `evalsha`
 - `slowlog`
 - `script`
-- `geoadd`
-- `georadius`
-- `georadius_ro`
-- `georadiusbymember`
-- `georadiusbymember_ro`
-- `geohash`
-- `geopos`
-- `geodist`
-- `geosearch`
-- `geosearchstore`
-- `pfselftest`
-- `pfadd`
-- `pfcount`
-- `pfmerge`
-- `pfdebug`
 - `xadd`
 - `xrange`
 - `xrevrange`

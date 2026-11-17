@@ -68,7 +68,14 @@ AOF coverage:
   incomplete MULTI handling, bad-format detection, `keydb-check-aof`, SPOP,
   EXPIREAT, and fsync timing.
 
-Additional suites in progress:
+Additional suites:
+
+- `unit/geo.tcl`: **56/56 pass**, including GEOADD options, GEOPOS/GEOHASH
+  output parity, GEODIST units, radius/box searches, STORE/STOREDIST,
+  COUNT/ANY ordering, and the randomized fuzzy searches;
+- `unit/hyperloglog.tcl`: **20/20 pass**, including sparse/dense encodings,
+  sparse-to-dense promotion, corrupted-object detection, PFDEBUG, multi-key
+  merges, and cached cardinality invalidation;
 
 - `unit/bitops.tcl`: **53/53 pass**;
 - `unit/bitfield.tcl`: 13 core tests pass, then replication setup is required;
@@ -78,7 +85,7 @@ Additional suites in progress:
 
 ## Next
 
-- Streams, HLL, GEO.
+- Streams, scripting, and replication.
 - `KEYDB.NHGET`/`NHSET` nested hashes.
 - AOF RDB preamble support and automatic rewrite thresholds.
 - Compact RDB output (quicklist/ziplist/intset/hash-ziplist/zset-ziplist) for
