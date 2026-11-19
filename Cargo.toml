@@ -24,7 +24,7 @@ mio = { version = "1.2", features = ["net", "os-poll"] }
 regex = "1.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha1 = "0.10"
+sha1 = "0.11"
 
 [profile.release]
 lto = "thin"
