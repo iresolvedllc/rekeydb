@@ -1,6 +1,6 @@
 # rekeydb command coverage
 
-Implemented: 204 / 236
+Implemented: 210 / 236
 
 | Category | Implemented | Total |
 |---|---:|---:|
@@ -20,7 +20,7 @@ Implemented: 204 / 236
 | @stream | 15 | 15 |
 | @string | 22 | 22 |
 | @transaction | 5 | 5 |
-| uncategorized | 10 | 28 |
+| uncategorized | 16 | 28 |
 
 ## Missing
 
@@ -29,12 +29,6 @@ Implemented: 204 / 236
 - `keydb.mexists`
 - `replping`
 - `monitor`
-- `subscribe`
-- `unsubscribe`
-- `psubscribe`
-- `punsubscribe`
-- `publish`
-- `pubsub`
 - `cluster`
 - `restore-asking`
 - `migrate`

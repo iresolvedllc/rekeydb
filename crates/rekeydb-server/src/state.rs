@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -90,6 +92,8 @@ pub struct Outcome {
     pub unblock: Option<(u64, bool)>,
     /// When set, these commands replace the default AOF entry for this command.
     pub aof_commands: Option<Vec<Vec<Vec<u8>>>>,
+    /// Additional reply frames sent after `reply` on the same connection.
+    pub extra: Vec<RespValue>,
 }
 
 impl Outcome {
@@ -102,6 +106,25 @@ impl Outcome {
             wake: Vec::new(),
             unblock: None,
             aof_commands: None,
+            extra: Vec::new(),
+        }
+    }
+
+    pub fn with_frames(mut frames: Vec<RespValue>) -> Self {
+        let reply = if frames.is_empty() {
+            RespValue::Null
+        } else {
+            frames.remove(0)
+        };
+        Self {
+            reply,
+            close: false,
+            shutdown: false,
+            block: None,
+            wake: Vec::new(),
+            unblock: None,
+            aof_commands: None,
+            extra: frames,
         }
     }
 
@@ -122,6 +145,7 @@ impl Outcome {
             wake: Vec::new(),
             unblock: None,
             aof_commands: None,
+            extra: Vec::new(),
         }
     }
 }
@@ -181,6 +205,30 @@ impl Default for ReplicationState {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct ClientSubscriptions {
+    channels: BTreeSet<Vec<u8>>,
+    patterns: BTreeSet<Vec<u8>>,
+    shards: BTreeSet<Vec<u8>>,
+    version: RespVersion,
+}
+
+impl ClientSubscriptions {
+    fn is_empty(&self) -> bool {
+        self.channels.is_empty() && self.patterns.is_empty() && self.shards.is_empty()
+    }
+
+    fn total(&self) -> usize {
+        self.channels.len() + self.patterns.len()
+    }
+}
+
+#[derive(Debug)]
+struct PubSubDelivery {
+    target: u64,
+    message: RespValue,
+}
+
 pub struct State {
     pub config: Config,
     dbs: Vec<Database<Value>>,
@@ -190,6 +238,7 @@ pub struct State {
     start_unix: i64,
     now_override: Option<i64>,
     config_values: BTreeMap<String, String>,
+    explicit_configs: BTreeSet<String>,
     debug_snapshots: Vec<Option<Arc<Snapshot<Value>>>>,
     encoding_limits: EncodingLimits,
     aof: Option<AofWriter>,
@@ -208,6 +257,12 @@ pub struct State {
     replication: ReplicationState,
     raw_string_keys: BTreeSet<(usize, Vec<u8>)>,
     command_calls: BTreeMap<String, u64>,
+    channel_subs: BTreeMap<Vec<u8>, BTreeSet<u64>>,
+    pattern_subs: BTreeMap<Vec<u8>, BTreeSet<u64>>,
+    shard_subs: BTreeMap<Vec<u8>, BTreeSet<u64>>,
+    client_subs: BTreeMap<u64, ClientSubscriptions>,
+    pending_pubsub: Vec<PubSubDelivery>,
+    has_expiries: bool,
 }
 
 impl State {
@@ -269,10 +324,17 @@ impl State {
             "zset-max-ziplist-value",
             "hll-sparse-max-bytes",
             "stream-node-max-entries",
+            "notify-keyspace-events",
         ] {
             config_values.insert(key.to_string(), String::new());
         }
         config_values.extend(config.settings.clone());
+        if let Some(value) = config_values.get("notify-keyspace-events").cloned()
+            && let Some(canonical) = canonical_notify_flags(&value)
+        {
+            config_values.insert("notify-keyspace-events".into(), canonical);
+        }
+        let explicit_configs: BTreeSet<String> = config.settings.keys().cloned().collect();
         let mut state = Self {
             config,
             dbs: (0..databases).map(|_| Database::new()).collect(),
@@ -282,6 +344,7 @@ impl State {
             start_unix: now_unix_ms() / 1000,
             now_override: None,
             config_values,
+            explicit_configs,
             debug_snapshots: (0..databases).map(|_| None).collect(),
             encoding_limits: EncodingLimits::default(),
             aof: None,
@@ -300,6 +363,12 @@ impl State {
             replication: ReplicationState::default(),
             raw_string_keys: BTreeSet::new(),
             command_calls: BTreeMap::new(),
+            channel_subs: BTreeMap::new(),
+            pattern_subs: BTreeMap::new(),
+            shard_subs: BTreeMap::new(),
+            client_subs: BTreeMap::new(),
+            pending_pubsub: Vec::new(),
+            has_expiries: false,
         };
         state.refresh_config_values();
         state
@@ -357,6 +426,7 @@ impl State {
             ("repl-backlog-size", "1048576"),
             ("replica-read-only", "yes"),
             ("replica-serve-stale-data", "yes"),
+            ("notify-keyspace-events", ""),
         ] {
             self.config_values
                 .entry(key.into())
@@ -426,6 +496,26 @@ impl State {
 
     pub fn replication_offset(&self) -> i64 {
         self.replication.offset
+    }
+
+    /// Diskless-sync batching delay in seconds. The delay is only honored
+    /// when it was explicitly configured (startup config or CONFIG SET), so
+    /// the default value does not slow down ordinary single-replica syncs.
+    pub fn replication_diskless_delay_seconds(&self) -> u64 {
+        if !self.explicit_configs.contains("repl-diskless-sync-delay") {
+            return 0;
+        }
+        if !self
+            .config_values
+            .get("repl-diskless-sync")
+            .is_some_and(|value| value.eq_ignore_ascii_case("yes"))
+        {
+            return 0;
+        }
+        self.config_values
+            .get("repl-diskless-sync-delay")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0)
     }
 
     pub fn replication_timeout_seconds(&self) -> Option<u64> {
@@ -501,8 +591,19 @@ impl State {
         self.replication.clients.insert(client_id, offset);
     }
 
+    pub fn replication_pending_len(&self) -> usize {
+        self.replication.pending.len()
+    }
+
     pub fn take_replication_output(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.replication.pending)
+    }
+
+    pub fn take_pubsub_deliveries(&mut self) -> Vec<(u64, RespValue)> {
+        std::mem::take(&mut self.pending_pubsub)
+            .into_iter()
+            .map(|delivery| (delivery.target, delivery.message))
+            .collect()
     }
 
     pub fn set_master_link_up(&mut self, replid: String, offset: i64) {
@@ -604,6 +705,83 @@ impl State {
             .is_some_and(|entry| entry.is_expired(now));
         if expired && !self.loading {
             self.dbs[db_index].remove(key);
+            self.notify_keyspace_event(db_index, key, 'x', "expired");
+        }
+    }
+
+    /// Remove expired keys and emit the `expired` notification. This is a
+    /// coarse active-expiry pass; it only runs once a TTL has been set.
+    pub fn expire_cycle(&mut self) {
+        if self.loading || !self.has_expiries {
+            return;
+        }
+        let now = self.now_ms();
+        let mut expired = Vec::new();
+        for (db_index, db) in self.dbs.iter().enumerate() {
+            for (key, entry) in db.collect_visible() {
+                if entry.is_expired(now) {
+                    expired.push((db_index, key));
+                    if expired.len() >= 512 {
+                        break;
+                    }
+                }
+            }
+            if expired.len() >= 512 {
+                break;
+            }
+        }
+        for (db, key) in expired {
+            if self.dbs[db].remove(&key).is_some() {
+                self.notify_keyspace_event(db, &key, 'x', "expired");
+            }
+        }
+    }
+
+    fn enforce_maxmemory(&mut self) {
+        let limit = self
+            .config_values
+            .get("maxmemory")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        if limit == 0 || self.loading {
+            return;
+        }
+        if self
+            .config_values
+            .get("maxmemory-policy")
+            .is_some_and(|policy| policy.eq_ignore_ascii_case("noeviction"))
+        {
+            return;
+        }
+        loop {
+            let used: usize = self
+                .dbs
+                .iter()
+                .map(|db| {
+                    db.collect_visible()
+                        .iter()
+                        .map(|(key, entry)| key.len() + entry.value.memory_usage())
+                        .sum::<usize>()
+                })
+                .sum();
+            if used <= limit {
+                return;
+            }
+            let mut victim = None;
+            for (db_index, db) in self.dbs.iter().enumerate() {
+                if let Some((key, _)) = db.collect_visible().into_iter().next() {
+                    victim = Some((db_index, key));
+                    break;
+                }
+            }
+            let Some((db, key)) = victim else {
+                return;
+            };
+            if self.dbs[db].remove(&key).is_some() {
+                self.notify_keyspace_event(db, &key, 'e', "evicted");
+            } else {
+                return;
+            }
         }
     }
 
@@ -624,6 +802,7 @@ impl State {
         {
             self.aof_propagate(db, command, &outcome);
         }
+        self.notify_command(command, &outcome, db);
         outcome
     }
 
@@ -646,6 +825,29 @@ impl State {
             && is_aof_write(&name)
         {
             return Outcome::error("READONLY You can't write against a read only replica.");
+        }
+
+        if self
+            .client_subs
+            .get(&client.id)
+            .is_some_and(|subs| !subs.is_empty())
+            && !matches!(
+                name.as_str(),
+                "SUBSCRIBE"
+                    | "UNSUBSCRIBE"
+                    | "PSUBSCRIBE"
+                    | "PUNSUBSCRIBE"
+                    | "SSUBSCRIBE"
+                    | "SUNSUBSCRIBE"
+                    | "PING"
+                    | "QUIT"
+                    | "RESET"
+            )
+        {
+            return Outcome::error(format!(
+                "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
+                name.to_ascii_lowercase()
+            ));
         }
 
         if name == "MULTI" {
@@ -731,6 +933,7 @@ impl State {
                 wake,
                 unblock: None,
                 aof_commands: None,
+                extra: Vec::new(),
             };
         }
         if let Some(queue) = client.multi.as_mut() {
@@ -740,7 +943,18 @@ impl State {
 
         match name.as_str() {
             "PING" => {
-                if args.len() == 1 {
+                let subscribed = self
+                    .client_subs
+                    .get(&client.id)
+                    .is_some_and(|subs| !subs.is_empty());
+                if subscribed {
+                    if args.len() > 2 {
+                        return wrong_args(args);
+                    }
+                    let payload = args.get(1).cloned().unwrap_or_default();
+                    let frame = vec![RespValue::bulk(b"pong".to_vec()), RespValue::bulk(payload)];
+                    Outcome::reply(push_frame(frame, client.version))
+                } else if args.len() == 1 {
                     Outcome::reply(RespValue::simple("PONG"))
                 } else if args.len() == 2 {
                     Outcome::reply(RespValue::bulk(args[1].clone()))
@@ -763,6 +977,7 @@ impl State {
                 wake: Vec::new(),
                 unblock: None,
                 aof_commands: None,
+                extra: Vec::new(),
             },
             "SELECT" => {
                 if args.len() != 2 {
@@ -958,6 +1173,10 @@ impl State {
                 self.cmd_zset(&name, args, client.db, client.version)
             }
             "BZPOPMIN" | "BZPOPMAX" => self.cmd_bzpop(&name, args, client.db),
+            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" | "SSUBSCRIBE"
+            | "SUNSUBSCRIBE" | "PUBLISH" | "SPUBLISH" | "PUBSUB" => {
+                self.cmd_pubsub(&name, args, client)
+            }
             "SLAVEOF" | "REPLICAOF" => self.cmd_replicaof(args),
             "REPLCONF" => self.cmd_replconf(args),
             "ROLE" => self.cmd_role(),
@@ -1121,6 +1340,9 @@ impl State {
                 ]))
             }
             "RESET" => {
+                let id = client.id;
+                self.unregister_client(id);
+                self.client_subs.remove(&id);
                 client.db = 0;
                 client.name.clear();
                 client.version = RespVersion::V2;
@@ -1134,6 +1356,7 @@ impl State {
                 wake: Vec::new(),
                 unblock: None,
                 aof_commands: None,
+                extra: Vec::new(),
             },
             _ => {
                 let mut message = format!(
@@ -1189,6 +1412,7 @@ impl State {
                     }
                     if let Some(entry) = self.dbs[db_index].get_mut(&args[1]) {
                         entry.expire.set_primary(when);
+                        self.has_expiries = true;
                     }
                     Some(when)
                 }
@@ -1235,6 +1459,7 @@ impl State {
         };
         let mut expire = ExpireEntry::new();
         expire.set_primary(when);
+        self.has_expiries = true;
         let mvcc = self.clock.next(now);
         self.dbs[db_index].insert_entry(
             args[1].clone(),
@@ -1655,6 +1880,7 @@ impl State {
             let mut expire = ExpireEntry::new();
             if let Some(when) = expire_at {
                 expire.set_primary(when);
+                self.has_expiries = true;
             }
             expire
         };
@@ -1804,6 +2030,7 @@ impl State {
         }
         if let Some(entry) = self.dbs[db_index].get_mut(&args[1]) {
             entry.expire.set_primary(when);
+            self.has_expiries = true;
         }
         Outcome::reply(RespValue::Integer(1))
     }
@@ -3570,6 +3797,400 @@ impl State {
             "ZUNION" | "ZINTER" | "ZDIFF" => self.cmd_zsetop(command, args, db_index, version),
             "ZUNIONSTORE" | "ZINTERSTORE" | "ZDIFFSTORE" => {
                 self.cmd_zsetop(command, args, db_index, version)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn publish_to_subscribers(
+        &mut self,
+        channel: &[u8],
+        payload: &[u8],
+        kind: &[u8],
+        patterns: bool,
+        sharded: bool,
+    ) -> usize {
+        let source = if sharded {
+            &self.shard_subs
+        } else {
+            &self.channel_subs
+        };
+        let direct: Vec<u64> = source
+            .get(channel)
+            .map(|ids| ids.iter().copied().collect())
+            .unwrap_or_default();
+        let mut deliveries = 0usize;
+        for id in direct {
+            deliveries += 1;
+            self.pending_pubsub.push(PubSubDelivery {
+                target: id,
+                message: push_frame(
+                    vec![
+                        RespValue::bulk(kind.to_vec()),
+                        RespValue::bulk(channel.to_vec()),
+                        RespValue::bulk(payload.to_vec()),
+                    ],
+                    self.client_subs
+                        .get(&id)
+                        .map_or(RespVersion::V2, |subs| subs.version),
+                ),
+            });
+        }
+        if patterns {
+            for (pattern, ids) in self.pattern_subs.clone() {
+                if !glob_match(&pattern, channel) {
+                    continue;
+                }
+                for id in ids {
+                    deliveries += 1;
+                    self.pending_pubsub.push(PubSubDelivery {
+                        target: id,
+                        message: push_frame(
+                            vec![
+                                RespValue::bulk(b"pmessage".to_vec()),
+                                RespValue::bulk(pattern.clone()),
+                                RespValue::bulk(channel.to_vec()),
+                                RespValue::bulk(payload.to_vec()),
+                            ],
+                            self.client_subs
+                                .get(&id)
+                                .map_or(RespVersion::V2, |subs| subs.version),
+                        ),
+                    });
+                }
+            }
+        }
+        deliveries
+    }
+
+    fn notify_keyspace_event(&mut self, db: usize, key: &[u8], class: char, event: &str) {
+        if self.loading {
+            return;
+        }
+        let flags = self
+            .config_values
+            .get("notify-keyspace-events")
+            .cloned()
+            .unwrap_or_default();
+        if flags.is_empty() || !(flags.contains('A') || flags.contains(class)) {
+            return;
+        }
+        if flags.contains('K') {
+            let mut channel = format!("__keyspace@{db}__:").into_bytes();
+            channel.extend_from_slice(key);
+            self.publish_to_subscribers(&channel, event.as_bytes(), b"message", true, false);
+        }
+        if flags.contains('E') {
+            let channel = format!("__keyevent@{db}__:{event}").into_bytes();
+            self.publish_to_subscribers(&channel, key, b"message", true, false);
+        }
+    }
+
+    fn notify_command(&mut self, command: &Command, outcome: &Outcome, db: usize) {
+        if self.loading || matches!(outcome.reply, RespValue::Error(_)) {
+            return;
+        }
+        let args = &command.args;
+        if args.is_empty() {
+            return;
+        }
+        let name = String::from_utf8_lossy(&args[0]).to_ascii_uppercase();
+        let integer = match &outcome.reply {
+            RespValue::Integer(value) => Some(*value),
+            _ => None,
+        };
+        let not_null = !matches!(outcome.reply, RespValue::Null | RespValue::NullArray);
+        match name.as_str() {
+            "SET" => {
+                if not_null {
+                    self.notify_keyspace_event(db, &args[1], '$', "set");
+                }
+            }
+            "SETNX" | "SETEX" | "PSETEX" | "MSET" | "MSETNX" | "GETSET" | "GETDEL" => {
+                if not_null {
+                    let keys: Vec<&Vec<u8>> = if name == "MSET" || name == "MSETNX" {
+                        args[1..].iter().step_by(2).collect()
+                    } else {
+                        vec![&args[1]]
+                    };
+                    for key in keys {
+                        self.notify_keyspace_event(db, key, '$', "set");
+                    }
+                }
+            }
+            "APPEND" | "SETRANGE" | "INCR" | "DECR" | "INCRBY" | "DECRBY" | "INCRBYFLOAT" => {
+                if not_null {
+                    self.notify_keyspace_event(db, &args[1], '$', &name.to_ascii_lowercase());
+                }
+            }
+            "DEL" | "UNLINK" => {
+                if integer.unwrap_or(0) > 0 {
+                    for key in &args[1..] {
+                        self.notify_keyspace_event(db, key, 'g', &name.to_ascii_lowercase());
+                    }
+                }
+            }
+            "EXPIRE" | "PEXPIRE" | "EXPIREAT" | "PEXPIREAT" => {
+                if integer == Some(1) {
+                    self.notify_keyspace_event(db, &args[1], 'g', &name.to_ascii_lowercase());
+                }
+            }
+            "PERSIST" => {
+                if integer == Some(1) {
+                    self.notify_keyspace_event(db, &args[1], 'g', "persist");
+                }
+            }
+            "LPUSH" | "RPUSH" | "LPUSHX" | "RPUSHX" | "LINSERT" | "LSET" | "LTRIM" | "LREM" => {
+                if not_null {
+                    self.notify_keyspace_event(db, &args[1], 'l', &name.to_ascii_lowercase());
+                }
+            }
+            "LPOP" | "RPOP" => {
+                if not_null {
+                    self.notify_keyspace_event(db, &args[1], 'l', &name.to_ascii_lowercase());
+                }
+            }
+            "SADD" | "SREM" => {
+                if integer.unwrap_or(0) > 0 {
+                    self.notify_keyspace_event(db, &args[1], 's', &name.to_ascii_lowercase());
+                }
+            }
+            "ZADD" | "ZREM" | "ZINCRBY" => {
+                if integer.unwrap_or(0) > 0 || name == "ZINCRBY" {
+                    self.notify_keyspace_event(db, &args[1], 'z', &name.to_ascii_lowercase());
+                }
+            }
+            "HSET" | "HMSET" => {
+                if name == "HMSET" || integer.unwrap_or(0) > 0 {
+                    self.notify_keyspace_event(db, &args[1], 'h', "hset");
+                }
+            }
+            "HINCRBY" | "HINCRBYFLOAT" => {
+                self.notify_keyspace_event(db, &args[1], 'h', &name.to_ascii_lowercase());
+            }
+            "HDEL" => {
+                if integer.unwrap_or(0) > 0 {
+                    self.notify_keyspace_event(db, &args[1], 'h', "hdel");
+                }
+            }
+            "XADD" => {
+                if not_null {
+                    self.notify_keyspace_event(db, &args[1], 't', "xadd");
+                }
+            }
+            "XDEL" | "XTRIM" if integer.unwrap_or(0) > 0 => {
+                self.notify_keyspace_event(db, &args[1], 't', &name.to_ascii_lowercase());
+            }
+            _ => {}
+        }
+    }
+
+    fn cmd_pubsub(
+        &mut self,
+        command: &str,
+        args: &[Vec<u8>],
+        client: &mut ClientContext,
+    ) -> Outcome {
+        match command {
+            "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
+                if args.len() < 2 {
+                    return wrong_args(args);
+                }
+                let mut frames = Vec::new();
+                let mut subs = self.client_subs.remove(&client.id).unwrap_or_default();
+                subs.version = client.version;
+                for channel in &args[1..] {
+                    match command {
+                        "SUBSCRIBE" => {
+                            subs.channels.insert(channel.clone());
+                            self.channel_subs
+                                .entry(channel.clone())
+                                .or_default()
+                                .insert(client.id);
+                        }
+                        "PSUBSCRIBE" => {
+                            subs.patterns.insert(channel.clone());
+                            self.pattern_subs
+                                .entry(channel.clone())
+                                .or_default()
+                                .insert(client.id);
+                        }
+                        _ => {
+                            subs.shards.insert(channel.clone());
+                            self.shard_subs
+                                .entry(channel.clone())
+                                .or_default()
+                                .insert(client.id);
+                        }
+                    }
+                    let (kind, count) = match command {
+                        "SUBSCRIBE" => (b"subscribe".to_vec(), subs.total()),
+                        "PSUBSCRIBE" => (b"psubscribe".to_vec(), subs.total()),
+                        _ => (b"ssubscribe".to_vec(), subs.shards.len()),
+                    };
+                    frames.push(subscription_frame(
+                        &kind,
+                        Some(channel),
+                        count,
+                        client.version,
+                    ));
+                }
+                self.client_subs.insert(client.id, subs);
+                Outcome::with_frames(frames)
+            }
+            "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" => {
+                let mut subs = self.client_subs.remove(&client.id).unwrap_or_default();
+                subs.version = client.version;
+                let (kind, requested): (&[u8], Vec<Vec<u8>>) = match command {
+                    "UNSUBSCRIBE" => (
+                        b"unsubscribe",
+                        if args.len() > 1 {
+                            args[1..].to_vec()
+                        } else {
+                            subs.channels.iter().cloned().collect()
+                        },
+                    ),
+                    "PUNSUBSCRIBE" => (
+                        b"punsubscribe",
+                        if args.len() > 1 {
+                            args[1..].to_vec()
+                        } else {
+                            subs.patterns.iter().cloned().collect()
+                        },
+                    ),
+                    _ => (
+                        b"sunsubscribe",
+                        if args.len() > 1 {
+                            args[1..].to_vec()
+                        } else {
+                            subs.shards.iter().cloned().collect()
+                        },
+                    ),
+                };
+                if requested.is_empty() {
+                    let count = if command == "SUNSUBSCRIBE" {
+                        subs.shards.len()
+                    } else {
+                        subs.total()
+                    };
+                    let frame = subscription_frame(kind, None, count, client.version);
+                    if !subs.is_empty() {
+                        self.client_subs.insert(client.id, subs);
+                    }
+                    return Outcome::reply(frame);
+                }
+                let mut frames = Vec::new();
+                for channel in &requested {
+                    match command {
+                        "UNSUBSCRIBE" => {
+                            subs.channels.remove(channel);
+                            if let Some(ids) = self.channel_subs.get_mut(channel) {
+                                ids.remove(&client.id);
+                                if ids.is_empty() {
+                                    self.channel_subs.remove(channel);
+                                }
+                            }
+                        }
+                        "PUNSUBSCRIBE" => {
+                            subs.patterns.remove(channel);
+                            if let Some(ids) = self.pattern_subs.get_mut(channel) {
+                                ids.remove(&client.id);
+                                if ids.is_empty() {
+                                    self.pattern_subs.remove(channel);
+                                }
+                            }
+                        }
+                        _ => {
+                            subs.shards.remove(channel);
+                            if let Some(ids) = self.shard_subs.get_mut(channel) {
+                                ids.remove(&client.id);
+                                if ids.is_empty() {
+                                    self.shard_subs.remove(channel);
+                                }
+                            }
+                        }
+                    }
+                    let count = if command == "SUNSUBSCRIBE" {
+                        subs.shards.len()
+                    } else {
+                        subs.total()
+                    };
+                    frames.push(subscription_frame(
+                        kind,
+                        Some(channel),
+                        count,
+                        client.version,
+                    ));
+                }
+                if !subs.is_empty() {
+                    self.client_subs.insert(client.id, subs);
+                }
+                Outcome::with_frames(frames)
+            }
+            "PUBLISH" | "SPUBLISH" => {
+                if args.len() != 3 {
+                    return wrong_args(args);
+                }
+                let (kind, patterns, sharded) = if command == "PUBLISH" {
+                    (b"message".to_vec(), true, false)
+                } else {
+                    (b"smessage".to_vec(), false, true)
+                };
+                let deliveries =
+                    self.publish_to_subscribers(&args[1], &args[2], &kind, patterns, sharded);
+                Outcome::reply(RespValue::Integer(deliveries as i64))
+            }
+            "PUBSUB" => {
+                if args.len() < 2 {
+                    return wrong_args(args);
+                }
+                let sub = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+                match sub.as_str() {
+                    "CHANNELS" | "SHARDCHANNELS" => {
+                        if args.len() > 3 {
+                            return Outcome::error("ERR syntax error");
+                        }
+                        let pattern = args.get(2).map(Vec::as_slice);
+                        let source = if sub == "CHANNELS" {
+                            &self.channel_subs
+                        } else {
+                            &self.shard_subs
+                        };
+                        let channels: Vec<RespValue> = source
+                            .iter()
+                            .filter(|(channel, ids)| {
+                                !ids.is_empty()
+                                    && pattern.is_none_or(|pattern| glob_match(pattern, channel))
+                            })
+                            .map(|(channel, _)| RespValue::bulk(channel.clone()))
+                            .collect();
+                        Outcome::reply(RespValue::Array(channels))
+                    }
+                    "NUMSUB" | "SHARDNUMSUB" => {
+                        let source = if sub == "NUMSUB" {
+                            &self.channel_subs
+                        } else {
+                            &self.shard_subs
+                        };
+                        let mut values = Vec::new();
+                        for channel in &args[2..] {
+                            values.push(RespValue::bulk(channel.clone()));
+                            values.push(RespValue::Integer(
+                                source.get(channel).map_or(0, |ids| ids.len()) as i64,
+                            ));
+                        }
+                        Outcome::reply(RespValue::Array(values))
+                    }
+                    "NUMPAT" => {
+                        if args.len() != 2 {
+                            return Outcome::error("ERR syntax error");
+                        }
+                        Outcome::reply(RespValue::Integer(self.pattern_subs.len() as i64))
+                    }
+                    _ => {
+                        Outcome::error("ERR Unknown PUBSUB subcommand or wrong number of arguments")
+                    }
+                }
             }
             _ => unreachable!(),
         }
@@ -8066,6 +8687,14 @@ impl State {
                     if !is_modifiable_config(&key) {
                         return Outcome::error(format!("ERR Unsupported CONFIG parameter: {key}"));
                     }
+                    self.explicit_configs.insert(key.clone());
+                    if key == "notify-keyspace-events" {
+                        let Some(canonical) = canonical_notify_flags(&value) else {
+                            return Outcome::error("ERR Invalid event flag");
+                        };
+                        self.config_values.insert(key, canonical);
+                        continue;
+                    }
                     if key == "requirepass" {
                         self.config.requirepass = if value.is_empty() {
                             None
@@ -8137,6 +8766,7 @@ impl State {
                     }
                     self.config_values.insert(key, value);
                 }
+                self.enforce_maxmemory();
                 Outcome::ok()
             }
             "RESETSTAT" => {
@@ -8450,6 +9080,7 @@ impl State {
                     wake: Vec::new(),
                     unblock: Some((id, as_error)),
                     aof_commands: None,
+                    extra: Vec::new(),
                 }
             }
             "SETINFO" => Outcome::ok(),
@@ -8467,6 +9098,32 @@ impl State {
     pub fn unregister_client(&mut self, id: u64) {
         self.client_names.remove(&id);
         self.replication.clients.remove(&id);
+        if let Some(subs) = self.client_subs.remove(&id) {
+            for channel in subs.channels {
+                if let Some(ids) = self.channel_subs.get_mut(&channel) {
+                    ids.remove(&id);
+                    if ids.is_empty() {
+                        self.channel_subs.remove(&channel);
+                    }
+                }
+            }
+            for pattern in subs.patterns {
+                if let Some(ids) = self.pattern_subs.get_mut(&pattern) {
+                    ids.remove(&id);
+                    if ids.is_empty() {
+                        self.pattern_subs.remove(&pattern);
+                    }
+                }
+            }
+            for channel in subs.shards {
+                if let Some(ids) = self.shard_subs.get_mut(&channel) {
+                    ids.remove(&id);
+                    if ids.is_empty() {
+                        self.shard_subs.remove(&channel);
+                    }
+                }
+            }
+        }
     }
 
     pub fn aof_path(&self) -> std::path::PathBuf {
@@ -9900,6 +10557,7 @@ fn is_modifiable_config(key: &str) -> bool {
             | "repl-diskless-load"
             | "repl-disable-tcp-nodelay"
             | "repl-backlog-size"
+            | "notify-keyspace-events"
             | "replica-read-only"
             | "replica-serve-stale-data"
             | "auto-aof-rewrite-percentage"
@@ -9918,6 +10576,54 @@ fn is_modifiable_config(key: &str) -> bool {
             | "zset-max-ziplist-value"
             | "hll-sparse-max-bytes"
             | "stream-node-max-entries"
+    )
+}
+
+fn canonical_notify_flags(value: &str) -> Option<String> {
+    const ALLOWED: &str = "KEAg$lshzxetmn";
+    if !value.chars().all(|ch| ALLOWED.contains(ch)) {
+        return None;
+    }
+    let mut seen = String::new();
+    for ch in value.chars() {
+        if !seen.contains(ch) {
+            seen.push(ch);
+        }
+    }
+    if seen.contains('A') {
+        let mut out = String::from("A");
+        if seen.contains('K') {
+            out.push('K');
+        }
+        if seen.contains('E') {
+            out.push('E');
+        }
+        return Some(out);
+    }
+    Some(seen)
+}
+
+fn push_frame(parts: Vec<RespValue>, version: RespVersion) -> RespValue {
+    if version == RespVersion::V3 {
+        RespValue::Push(parts)
+    } else {
+        RespValue::Array(parts)
+    }
+}
+
+fn subscription_frame(
+    kind: &[u8],
+    channel: Option<&[u8]>,
+    count: usize,
+    version: RespVersion,
+) -> RespValue {
+    push_frame(
+        vec![
+            RespValue::bulk(kind.to_vec()),
+            channel.map_or(RespValue::Null, |channel| RespValue::bulk(channel.to_vec())),
+            RespValue::Integer(count as i64),
+        ],
+        version,
     )
 }
 
@@ -9964,8 +10670,16 @@ mod tests {
     }
 
     fn run(state: &mut State, client: &mut ClientContext, args: &[&[u8]]) -> RespValue {
+        run_full(state, client, args).reply
+    }
+
+    fn run_full(
+        state: &mut State,
+        client: &mut ClientContext,
+        args: &[&[u8]],
+    ) -> crate::state::Outcome {
         let command = Command::new(args.iter().map(|arg| arg.to_vec()).collect());
-        state.execute(&command, client).reply
+        state.execute(&command, client)
     }
 
     #[test]
@@ -10820,5 +11534,184 @@ mod tests {
         let state = state();
         assert!(state.config_values.contains_key("maxmemory"));
         assert_eq!(state.config_values["server-threads"], "1");
+    }
+    #[test]
+    fn pubsub_subscribe_publish() {
+        let mut state = state();
+        let mut sub = ClientContext::new(2, "sub".to_string());
+        let outcome = run_full(&mut state, &mut sub, &[b"SUBSCRIBE", b"chan1", b"chan2"]);
+        assert_eq!(
+            outcome.reply,
+            RespValue::Array(vec![
+                RespValue::bulk(b"subscribe".to_vec()),
+                RespValue::bulk(b"chan1".to_vec()),
+                RespValue::Integer(1),
+            ])
+        );
+        assert_eq!(
+            outcome.extra,
+            vec![RespValue::Array(vec![
+                RespValue::bulk(b"subscribe".to_vec()),
+                RespValue::bulk(b"chan2".to_vec()),
+                RespValue::Integer(2),
+            ])]
+        );
+        let mut publisher = new_client();
+        assert_eq!(
+            run(
+                &mut state,
+                &mut publisher,
+                &[b"PUBLISH", b"chan1", b"hello"]
+            ),
+            RespValue::Integer(1)
+        );
+        let deliveries = state.take_pubsub_deliveries();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].0, 2);
+        assert_eq!(
+            deliveries[0].1,
+            RespValue::Array(vec![
+                RespValue::bulk(b"message".to_vec()),
+                RespValue::bulk(b"chan1".to_vec()),
+                RespValue::bulk(b"hello".to_vec()),
+            ])
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut publisher,
+                &[b"PUBLISH", b"chan2", b"world"]
+            ),
+            RespValue::Integer(1)
+        );
+        let mut other = ClientContext::new(3, "other".to_string());
+        assert_eq!(
+            run(&mut state, &mut other, &[b"PUBLISH", b"chan1", b"x"]),
+            RespValue::Integer(1)
+        );
+    }
+
+    #[test]
+    fn pubsub_patterns_and_pubsub_queries() {
+        let mut state = state();
+        let mut sub = ClientContext::new(2, "sub".to_string());
+        assert_eq!(
+            run(&mut state, &mut sub, &[b"PSUBSCRIBE", b"foo.*"]),
+            RespValue::Array(vec![
+                RespValue::bulk(b"psubscribe".to_vec()),
+                RespValue::bulk(b"foo.*".to_vec()),
+                RespValue::Integer(1),
+            ])
+        );
+        let mut publisher = new_client();
+        assert_eq!(
+            run(
+                &mut state,
+                &mut publisher,
+                &[b"PUBLISH", b"foo.bar", b"hello"]
+            ),
+            RespValue::Integer(1)
+        );
+        let deliveries = state.take_pubsub_deliveries();
+        assert_eq!(
+            deliveries[0].1,
+            RespValue::Array(vec![
+                RespValue::bulk(b"pmessage".to_vec()),
+                RespValue::bulk(b"foo.*".to_vec()),
+                RespValue::bulk(b"foo.bar".to_vec()),
+                RespValue::bulk(b"hello".to_vec()),
+            ])
+        );
+        assert_eq!(
+            run(&mut state, &mut publisher, &[b"PUBSUB", b"NUMPAT"]),
+            RespValue::Integer(1)
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut publisher,
+                &[b"PUBSUB", b"NUMSUB", b"foo.bar"]
+            ),
+            RespValue::Array(vec![
+                RespValue::bulk(b"foo.bar".to_vec()),
+                RespValue::Integer(0),
+            ])
+        );
+        assert_eq!(
+            run(&mut state, &mut publisher, &[b"PUBSUB", b"CHANNELS"]),
+            RespValue::Array(vec![])
+        );
+    }
+
+    #[test]
+    fn pubsub_unsubscribe_all_and_restriction() {
+        let mut state = state();
+        let mut sub = ClientContext::new(2, "sub".to_string());
+        run_full(&mut state, &mut sub, &[b"SUBSCRIBE", b"a", b"b"]);
+        assert!(matches!(
+            run(&mut state, &mut sub, &[b"GET", b"x"]),
+            RespValue::Error(_)
+        ));
+        let outcome = run_full(&mut state, &mut sub, &[b"UNSUBSCRIBE"]);
+        assert_eq!(
+            outcome.reply,
+            RespValue::Array(vec![
+                RespValue::bulk(b"unsubscribe".to_vec()),
+                RespValue::bulk(b"a".to_vec()),
+                RespValue::Integer(1),
+            ])
+        );
+        assert_eq!(outcome.extra.len(), 1);
+        let mut publisher = new_client();
+        assert_eq!(
+            run(&mut state, &mut publisher, &[b"PUBLISH", b"a", b"x"]),
+            RespValue::Integer(0)
+        );
+        let outcome = run_full(&mut state, &mut sub, &[b"UNSUBSCRIBE"]);
+        assert_eq!(
+            outcome.reply,
+            RespValue::Array(vec![
+                RespValue::bulk(b"unsubscribe".to_vec()),
+                RespValue::Null,
+                RespValue::Integer(0),
+            ])
+        );
+        assert_eq!(run(&mut state, &mut sub, &[b"GET", b"x"]), RespValue::Null);
+    }
+
+    #[test]
+    fn pubsub_sharded() {
+        let mut state = state();
+        let mut sub = ClientContext::new(2, "sub".to_string());
+        run_full(&mut state, &mut sub, &[b"SSUBSCRIBE", b"schan"]);
+        let mut publisher = new_client();
+        assert_eq!(
+            run(&mut state, &mut publisher, &[b"PUBLISH", b"schan", b"x"]),
+            RespValue::Integer(0)
+        );
+        assert_eq!(
+            run(&mut state, &mut publisher, &[b"SPUBLISH", b"schan", b"y"]),
+            RespValue::Integer(1)
+        );
+        let deliveries = state.take_pubsub_deliveries();
+        assert_eq!(
+            deliveries[0].1,
+            RespValue::Array(vec![
+                RespValue::bulk(b"smessage".to_vec()),
+                RespValue::bulk(b"schan".to_vec()),
+                RespValue::bulk(b"y".to_vec()),
+            ])
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &mut publisher,
+                &[b"PUBSUB", b"SHARDNUMSUB", b"schan"]
+            ),
+            RespValue::Array(vec![
+                RespValue::bulk(b"schan".to_vec()),
+                RespValue::Integer(1),
+            ])
+        );
     }
 }

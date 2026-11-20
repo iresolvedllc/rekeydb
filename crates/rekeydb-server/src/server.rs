@@ -22,11 +22,18 @@ use crate::state::{BlockKind, BlockRequest, ClientContext, State};
 
 const LISTENER: Token = Token(0);
 const MAX_OUTPUT_BUFFER: usize = 64 * 1024 * 1024;
+const MAX_REPLICA_OUTPUT_BUFFER: usize = 1024 * 1024 * 1024;
 const MAX_QUERY_BUFFER: usize = 64 * 1024 * 1024;
 
 struct BlockedClient {
     request: BlockRequest,
     deadline: Option<Instant>,
+}
+
+struct PendingSync {
+    token: Token,
+    name: String,
+    ready_at: Instant,
 }
 
 struct Client {
@@ -113,6 +120,7 @@ pub fn run(config: Config) -> Result<(), String> {
         running: true,
         our_port: config.port,
         replica_handle: None,
+        pending_syncs: Vec::new(),
         trace_commands: std::env::var_os("REKEYDB_TRACE_COMMANDS").is_some(),
         trace_names: std::env::var_os("REKEYDB_TRACE_NAMES").is_some(),
     };
@@ -137,6 +145,7 @@ struct Server {
     running: bool,
     our_port: u16,
     replica_handle: Option<ReplicaHandle>,
+    pending_syncs: Vec<PendingSync>,
     trace_commands: bool,
     trace_names: bool,
 }
@@ -144,11 +153,24 @@ struct Server {
 impl Server {
     fn run(&mut self) -> Result<(), String> {
         let mut events = Events::with_capacity(1024);
+        let mut last_expire = Instant::now();
         while self.running {
             self.poll
                 .poll(&mut events, Some(Duration::from_millis(25)))
                 .map_err(|err| format!("poll failed: {err}"))?;
+            if last_expire.elapsed() >= Duration::from_millis(100) {
+                let messages = {
+                    let mut state = self.state.lock().expect("state poisoned");
+                    state.expire_cycle();
+                    state.take_pubsub_deliveries()
+                };
+                if !messages.is_empty() {
+                    self.deliver_pubsub(&messages);
+                }
+                last_expire = Instant::now();
+            }
             self.expire_blocked();
+            self.process_pending_syncs();
             for event in events.iter() {
                 let token = event.token();
                 if token == LISTENER {
@@ -294,7 +316,7 @@ impl Server {
             }
             let name = String::from_utf8_lossy(&command.args[0]).to_ascii_uppercase();
             if name == "SYNC" || name == "PSYNC" {
-                self.handle_sync_command(&mut client, &name);
+                self.handle_sync_command(token, &mut client, &name);
                 continue;
             }
             if name == "REPLCONF"
@@ -310,9 +332,13 @@ impl Server {
             let mut state = self.state.lock().expect("state poisoned");
             let outcome = state.execute(&command, &mut client.ctx);
             let replication_output = state.take_replication_output();
+            let pubsub_messages = state.take_pubsub_deliveries();
             drop(state);
             if !replication_output.is_empty() {
                 self.broadcast_replication(&replication_output);
+            }
+            if !pubsub_messages.is_empty() {
+                self.deliver_pubsub(&pubsub_messages);
             }
             let mut reply = outcome.reply;
             if let Some((id, as_error)) = outcome.unblock
@@ -332,6 +358,9 @@ impl Server {
                 break;
             }
             reply.encode(client.ctx.version, &mut client.out);
+            for extra in &outcome.extra {
+                extra.encode(client.ctx.version, &mut client.out);
+            }
             if outcome.close {
                 close = true;
             }
@@ -353,7 +382,12 @@ impl Server {
             .stats_mut()
             .total_net_input_bytes += input_bytes as u64;
 
-        if client.out.len() > MAX_OUTPUT_BUFFER {
+        let output_limit = if client.replica {
+            MAX_REPLICA_OUTPUT_BUFFER
+        } else {
+            MAX_OUTPUT_BUFFER
+        };
+        if client.out.len() > output_limit {
             close = true;
         }
         if close {
@@ -366,11 +400,53 @@ impl Server {
         }
     }
 
-    fn handle_sync_command(&mut self, client: &mut Client, name: &str) {
+    fn handle_sync_command(&mut self, token: Token, client: &mut Client, name: &str) {
+        let delay = {
+            let state = self.state.lock().expect("state poisoned");
+            state.replication_diskless_delay_seconds()
+        };
+        if delay > 0 {
+            self.pending_syncs.push(PendingSync {
+                token,
+                name: name.to_string(),
+                ready_at: Instant::now() + Duration::from_secs(delay),
+            });
+            return;
+        }
+        self.finish_sync(client, name);
+    }
+
+    fn process_pending_syncs(&mut self) {
+        let now = Instant::now();
+        while let Some(index) = self
+            .pending_syncs
+            .iter()
+            .position(|pending| pending.ready_at <= now)
+        {
+            let pending = self.pending_syncs.remove(index);
+            let Some(mut client) = self.clients.remove(&pending.token) else {
+                continue;
+            };
+            self.finish_sync(&mut client, &pending.name);
+            self.flush_client_inner(pending.token, client);
+        }
+    }
+
+    fn finish_sync(&mut self, client: &mut Client, name: &str) {
         let mut state = self.state.lock().expect("state poisoned");
         let payload = state.replication_payload();
         match payload {
             Ok((replid, offset, payload)) => {
+                if std::env::var_os("REKEYDB_TRACE_REPL").is_some() {
+                    eprintln!(
+                        "repl: {} client={} offset={} pending={} payload={}",
+                        name,
+                        client.ctx.id,
+                        offset,
+                        state.replication_pending_len(),
+                        payload.len()
+                    );
+                }
                 state.register_replica(client.ctx.id);
                 drop(state);
                 let mut handshake = Vec::new();
@@ -389,6 +465,24 @@ impl Server {
                     .out
                     .extend_from_slice(format!("-ERR {err}\r\n").as_bytes());
             }
+        }
+    }
+
+    fn deliver_pubsub(&mut self, messages: &[(u64, RespValue)]) {
+        for (target, message) in messages {
+            let Some(token) = self
+                .clients
+                .iter()
+                .find(|(_, client)| client.ctx.id == *target)
+                .map(|(token, _)| *token)
+            else {
+                continue;
+            };
+            let Some(mut client) = self.clients.remove(&token) else {
+                continue;
+            };
+            message.encode(client.ctx.version, &mut client.out);
+            self.flush_client_inner(token, client);
         }
     }
 
@@ -477,13 +571,20 @@ impl Server {
             } else {
                 None
             };
-            let (reply, replication_output) = {
+            let (reply, replication_output, pubsub_messages) = {
                 let mut state = self.state.lock().expect("state poisoned");
                 let reply = state.serve_blocked(&blocked.request);
-                (reply, state.take_replication_output())
+                (
+                    reply,
+                    state.take_replication_output(),
+                    state.take_pubsub_deliveries(),
+                )
             };
             if !replication_output.is_empty() {
                 self.broadcast_replication(&replication_output);
+            }
+            if !pubsub_messages.is_empty() {
+                self.deliver_pubsub(&pubsub_messages);
             }
             let Some(reply) = reply else {
                 client.blocked = Some(blocked);
@@ -605,6 +706,7 @@ impl Server {
         while !client.out.is_empty() {
             match client.stream.write(&client.out) {
                 Ok(0) => {
+                    client.out.clear();
                     client.close_after_flush = true;
                     break;
                 }
@@ -620,6 +722,10 @@ impl Server {
                 Err(err) if err.kind() == ErrorKind::Interrupted => continue,
                 Err(err) => {
                     eprintln!("client {} write failed: {err}", client.ctx.id);
+                    // The peer is gone or the socket is broken. Drop any
+                    // remaining output so the cleanup path below runs instead
+                    // of retrying a dead connection forever.
+                    client.out.clear();
                     client.close_after_flush = true;
                     break;
                 }

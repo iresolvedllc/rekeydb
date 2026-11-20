@@ -207,3 +207,12 @@ slaveof
 replicaof
 stralgo
 lfence
+subscribe
+unsubscribe
+psubscribe
+punsubscribe
+publish
+pubsub
+ssubscribe
+sunsubscribe
+spublish

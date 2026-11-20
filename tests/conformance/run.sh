@@ -25,6 +25,11 @@ run_dir="$root/tests/tmp/conformance-$$"
 rm -rf "$run_dir"
 mkdir -p "$run_dir/src"
 cp -a "$reference/tests" "$run_dir/tests"
+# The upstream helpers stop background load with /bin/kill, which does not
+# exist on NixOS (and some other systems). Use the PATH-resolved kill so the
+# writers actually stop before digests and offset checks.
+find "$run_dir/tests" -name '*.tcl' -print0 |
+    xargs -0 sed -i 's#exec /bin/kill#exec kill#g'
 rm -rf "$run_dir/tests/tmp"
 ln -s "$binary" "$run_dir/src/keydb-server"
 

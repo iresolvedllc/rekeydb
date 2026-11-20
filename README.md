@@ -21,8 +21,8 @@ Bootstrap / P0. Working today:
   and KeyDB-compatible timestamps;
 - strings (including bitmaps/BITFIELD, HyperLogLog, and `STRALGO LCS`),
   lists, hashes, sets, sorted sets, streams with consumer groups, GEO
-  commands, expiry, keyspace commands,
-  `OBJECT ENCODING`,
+  commands, pub/sub with sharded channels and keyspace notifications,
+  expiry, keyspace commands, `OBJECT ENCODING`,
   `DEBUG MVCC`, `DEBUG PROTOCOL`, `HELLO`, `CLIENT`, `CONFIG`, `INFO`, basic
   `MULTI`/`EXEC`/`WATCH`, `SORT`, and a conformance harness passing all 22
   KeyDB `unit/protocol.tcl` tests, all 176 `unit/type/list.tcl` tests,
@@ -30,7 +30,8 @@ Bootstrap / P0. Working today:
   all 56 `unit/geo.tcl` tests, all 20 `unit/hyperloglog.tcl` tests, all
   56 `unit/type/stream.tcl` tests, all 35 `unit/type/stream-cgroups.tcl`
   tests, all 72 `unit/type/string.tcl` tests, all 16 `unit/bitfield.tcl`
-  tests, and all 51 `unit/keyspace.tcl` tests;
+  tests, all 51 `unit/keyspace.tcl` tests, and all 27 `unit/pubsub.tcl`
+  tests;
 - RDB v9 save/load, `SAVE`/`BGSAVE`, `DEBUG RELOAD`, `DEBUG DIGEST`, and
   `DUMP`/`RESTORE`, cross-compatible with KeyDB in both directions for strings, lists, hashes,
   sets, sorted sets, and expirations;
@@ -38,8 +39,8 @@ Bootstrap / P0. Working today:
   startup replay, truncation handling, and `DEBUG LOADAOF`;
 - master/replica replication with full resynchronization, live command
   propagation, replica read-only enforcement, offsets/ACKs, `ROLE`,
-  `INFO replication`, and basic `WAIT`; partial resync and diskless modes
-  remain future work;
+  `INFO replication`, handshake timeouts, diskless-sync delay, and basic
+  `WAIT`; partial resync and diskless-load modes remain future work;
 - generated command/config/test manifests, `docs/status.md` engineering
   status, and a Zig `rekeydb-cli`.
 

@@ -40,11 +40,22 @@ The keyspace suite (`unit/keyspace.tcl`) passes all **51** tests, including
 stream `COPY` and `DEBUG DIGEST-VALUE`.
 
 Replication core is exercised by the suites above and by a focused
-`integration/replication.tcl` run: **23 tests pass**, covering full sync,
+`integration/replication.tcl` run: **29 tests pass**, covering full sync,
 live propagation, blocking list replication, `GETSET`/`GETDEL` rewriting,
-`ROLE`, and `FLUSHALL`. The suite then reaches an `EVAL` test and stops
-because scripting is not implemented; two handshake-delay tests and four
-concurrent multi-replica digest tests remain outstanding.
+`ROLE`, `FLUSHALL`, both handshake timeout tests, and all four concurrent
+multi-replica digest tests. The suite then reaches an `EVAL` test and stops
+because scripting is not implemented.
+
+The multi-replica digest failures were traced to the test harness, not the
+server: the upstream helpers stop background load with `/bin/kill`, which
+does not exist on NixOS. `tests/conformance/run.sh` now rewrites that call to
+the PATH-resolved `kill` in its private test copy, so load stops before
+digests are compared.
+
+The pub/sub suite (`unit/pubsub.tcl`) passes all **27** tests, including
+channel and pattern subscriptions, sharded channels, RESP2 push frames,
+`PUBSUB` introspection, connection cleanup, and every keyspace-notification
+case in the suite.
 
 The reference binary passes all 22 protocol tests.
 

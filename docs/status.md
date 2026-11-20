@@ -43,6 +43,8 @@ and copied on write for snapshots.
 | Expiry | primary TTL plus subkey expiry primitives |
 | Keyspace | `DEL`/`UNLINK`, `EXISTS`, `TYPE`, `KEYS`, `SCAN`, `RANDOMKEY`, `RENAME`, `MOVE`, `COPY`, `SWAPDB`, `SORT`, `OBJECT`, `DUMP`/`RESTORE` |
 | Transactions | `MULTI`, `EXEC`, `DISCARD`, `WATCH`/`UNWATCH` |
+| Pub/Sub | complete: channel and pattern subscriptions, sharded channels, `PUBSUB` introspection, RESP2/RESP3 push frames, disconnect cleanup |
+| Keyspace notifications | `notify-keyspace-events` K/E/A classes for string, list, set, hash, zset, generic, expired, and evicted events |
 | Admin/connection | `HELLO`, `AUTH`, `CLIENT`, `CONFIG`, `INFO`, `COMMAND`, `TIME`, `LASTSAVE`, `DEBUG` subsets, `SAVE`/`BGSAVE`, `BGREWRITEAOF` |
 
 ### Persistence
@@ -66,7 +68,10 @@ Implemented:
 - `SLAVEOF` / `REPLICAOF` and `SLAVEOF NO ONE` promotion.
 - `PSYNC` full resynchronization (`+FULLRESYNC`) and legacy `SYNC`.
 - Full-sync payload transfer, replica link state, reconnection loop, and
-  timeout handling for handshakes.
+  handshake timeout semantics, including `repl-diskless-sync-delay` batching
+  when the delay is explicitly configured.
+- Replica connections use a larger output-buffer ceiling than ordinary
+  clients so a large full-sync payload is not cut off mid-transfer.
 - Live command propagation from master to all connected replicas, including
   database `SELECT`, command rewriting (`GETDEL`→`DEL`, `GETSET`→`SET`,
   blocking list commands, streams, and other AOF rewrites).
@@ -86,16 +91,14 @@ Partial/incomplete:
 
 - No replication backlog or partial resynchronization (`+CONTINUE`); every
   `PSYNC` performs a full resync.
-- No diskless-sync delay/load modes, periodic master `PING`/`GETACK`, chained
+- No diskless-load modes, periodic master `PING`/`GETACK`, chained
   replication, or replication of command statistics.
 - `WAIT` returns the current acknowledged replica count immediately; it does
   not block for the requested timeout.
-- `integration/replication.tcl`: 23 tests pass, then the suite reaches an
-  `EVAL` test and stops because scripting is not implemented. Before that
-  point, two handshake tests and the four concurrent multi-replica digest
-  tests still fail; the latter is under investigation after the
-  `format_double_17g` fix (a controlled three-replica reproduction now
-  matches, so the remaining issue is specific to the upstream test flow).
+- `integration/replication.tcl`: 29 tests pass, covering both handshake
+  tests, all four concurrent multi-replica digest tests, blocking-command
+  propagation, offset synchronization, `ROLE`, and `FLUSHALL`. The suite then
+  reaches an `EVAL` test and stops because scripting is not implemented.
 
 ## Conformance status
 
@@ -118,9 +121,10 @@ All suites below were run with the KeyDB Tcl harness, `--clients 1`.
 | `unit/keyspace.tcl` | 51/51 |
 | `unit/type/stream.tcl` | 56/56 |
 | `unit/type/stream-cgroups.tcl` | 35/35 |
-| `integration/replication.tcl` | 23 pass, then blocked by missing scripting; 6 known failures |
+| `integration/replication.tcl` | 29 pass, then blocked by missing scripting |
+| `unit/pubsub.tcl` | 27/27 |
 
-Command coverage: **204 / 236**.
+Command coverage: **210 / 236**.
 
 ## Engineering fixes landed in this cycle
 
@@ -141,17 +145,34 @@ Command coverage: **204 / 236**.
 - Startup config directives are seeded into the runtime `CONFIG` view, so
   per-test overrides such as `stream-node-max-entries` apply.
 - `LFENCE` implemented as an acknowledgement hook for the test harness.
+- The conformance harness now rewrites the upstream helpers' `/bin/kill` to
+  the PATH-resolved `kill`. On NixOS `/bin/kill` does not exist, so the
+  upstream tests silently left their background writers running and compared
+  digests while the dataset was still changing. This was the root cause of
+  the apparent concurrent multi-replica digest failures.
+- A client socket whose write fails now drops buffered output and closes,
+  instead of remaining registered with a non-empty buffer. The old path could
+  spin the event loop at 100% CPU after a peer disappeared mid-reply.
+- Explicitly configured diskless-sync delays are honored without delaying
+  ordinary single-replica syncs that rely on the default delay value.
+- Pub/Sub was implemented with channel, pattern, and sharded subscriptions,
+  RESP2/RESP3 push frames, `PUBSUB` introspection, and subscription cleanup
+  on disconnect. `notify-keyspace-events` supports K/E/A flag classes and
+  canonicalizes flags on `CONFIG GET`/`SET`.
+- A coarse active-expiry pass (100ms, gated on the first TTL being set)
+  removes expired keys and emits `expired` notifications; lazy expiry emits
+  the same event. `CONFIG SET maxmemory` now performs a simple eviction pass
+  and emits `evicted` notifications. Eviction is first-key, not real
+  LRU/LFU/volatile policy selection.
 
 ## Needs work
 
 ### Highest priority
 
 1. **Replication hardening**
-   - Identify and fix the remaining concurrent multi-replica digest failures
-     in `integration/replication.tcl`.
    - Implement a replication backlog and `PSYNC +CONTINUE` partial resync.
-   - Implement diskless-sync delay/load modes and handshake timeout semantics
-     required by the two failing handshake tests.
+   - Implement diskless-load modes, periodic master `PING`/`GETACK`, and
+     chained replication.
    - Make `WAIT` block up to its timeout and use replica acknowledgements.
    - Use an RDB full-sync payload, ideally with KeyDB-compatible stream
      listpacks, so KeyDB replicas can attach to rekeydb masters.
@@ -164,11 +185,11 @@ Command coverage: **204 / 236**.
 
 ### Remaining command surface
 
-`module`, `expdel`, `keydb.mexists`, `replping`, `monitor`, pub/sub commands,
-`cluster`, `restore-asking`, `migrate`, `asking`, `readonly`/`readwrite`,
-`memory`, `eval`/`evalsha`, `script`, `slowlog`, `latency`, `acl`,
-`rreplay`, `keydb.cron`, `keydb.nhget`, `keydb.nhset`,
-`KEYDB.MVCCRESTORE`, and `failover` are not implemented.
+`module`, `expdel`, `keydb.mexists`, `replping`, `monitor`, `cluster`,
+`restore-asking`, `migrate`, `asking`, `readonly`/`readwrite`, `memory`,
+`eval`/`evalsha`, `script`, `slowlog`, `latency`, `acl`, `rreplay`,
+`keydb.cron`, `keydb.nhget`, `keydb.nhset`, `KEYDB.MVCCRESTORE`, and
+`failover` are not implemented.
 
 ### Later milestones
 
@@ -178,6 +199,9 @@ Command coverage: **204 / 236**.
 - ACL, TLS, and connection security parity.
 - Compact RDB output (quicklist/ziplist/intset/hash-ziplist/zset-ziplist).
 - AOF RDB preamble support and automatic rewrite thresholds.
+- Full keyspace-notification coverage for every remaining command family,
+  `m`/`n` classes, and stream events beyond `XADD`/`XDEL`/`XTRIM`.
+- Proper expiry heaps and LRU/LFU/volatile-maxmemory policies.
 - RDB stream listpacks and `DUMP` compatibility for streams.
 - Performance work: benchmark gates, multiplexing/server threads, async MVCC
   lifecycle, and Zig storage integration.

@@ -202,6 +202,9 @@ fn sync_once(
         .parse::<usize>()
         .map_err(|_| format!("invalid payload length: {length_text}"))?;
     let payload = read_exact(&mut stream, length, shutdown)?;
+    if std::env::var_os("REKEYDB_TRACE_REPL").is_some() {
+        eprintln!("repl: full sync payload bytes={length} offset={offset}");
+    }
 
     {
         let mut state = state.lock().expect("state poisoned");
